@@ -173,7 +173,7 @@ async fn get_cli_session(app: tauri::AppHandle) -> Result<Option<SessionView>, S
 
     let session = Session::load_or_create(&dir, filter)?;
     session.save()?;
-    *app.state::<std::sync::Mutex<Option<Session>>>().lock().unwrap() = Some(session.clone());
+    *app.state::<std::sync::Mutex<Option<Session>>>().lock().unwrap_or_else(|e| e.into_inner()) = Some(session.clone());
     Ok(Some(SessionView::from(&session)))
 }
 
@@ -193,21 +193,21 @@ async fn select_folder(app: tauri::AppHandle) -> Result<SessionView, String> {
     let session = Session::load_or_create(&path, None)?;
     session.save()?;
 
-    *app.state::<std::sync::Mutex<Option<Session>>>().lock().unwrap() = Some(session.clone());
+    *app.state::<std::sync::Mutex<Option<Session>>>().lock().unwrap_or_else(|e| e.into_inner()) = Some(session.clone());
     Ok(SessionView::from(&session))
 }
 
 #[tauri::command]
 async fn get_session(app: tauri::AppHandle) -> Result<Option<SessionView>, String> {
     let state = app.state::<std::sync::Mutex<Option<Session>>>();
-    let guard = state.lock().unwrap();
+    let guard = state.lock().unwrap_or_else(|e| e.into_inner());
     Ok(guard.as_ref().map(SessionView::from))
 }
 
 #[tauri::command]
 async fn set_score(app: tauri::AppHandle, filename: String, score: Option<Score>) -> Result<SessionView, String> {
     let state = app.state::<std::sync::Mutex<Option<Session>>>();
-    let mut guard = state.lock().unwrap();
+    let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
     let session = guard.as_mut().ok_or("no session")?;
     if session.scores.contains_key(&filename) {
         session.scores.insert(filename, score);
@@ -221,7 +221,7 @@ async fn set_score(app: tauri::AppHandle, filename: String, score: Option<Score>
 #[tauri::command]
 async fn set_note(app: tauri::AppHandle, filename: String, note: String) -> Result<(), String> {
     let state = app.state::<std::sync::Mutex<Option<Session>>>();
-    let mut guard = state.lock().unwrap();
+    let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
     let session = guard.as_mut().ok_or("no session")?;
     if !session.scores.contains_key(&filename) {
         return Err(format!("unknown file: {filename}"));
@@ -237,7 +237,7 @@ async fn set_note(app: tauri::AppHandle, filename: String, note: String) -> Resu
 #[tauri::command]
 async fn get_pdf_url(app: tauri::AppHandle, filename: String) -> Result<String, String> {
     let state = app.state::<std::sync::Mutex<Option<Session>>>();
-    let guard = state.lock().unwrap();
+    let guard = state.lock().unwrap_or_else(|e| e.into_inner());
     let session = guard.as_ref().ok_or("no session")?;
     let path = Path::new(&session.folder).join(&filename);
     if path.exists() {
@@ -252,7 +252,7 @@ async fn export_csv(app: tauri::AppHandle) -> Result<String, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let state = app.state::<std::sync::Mutex<Option<Session>>>();
-    let guard = state.lock().unwrap();
+    let guard = state.lock().unwrap_or_else(|e| e.into_inner());
     let session = guard.as_ref().ok_or("no session")?;
     let rows: Vec<(String, String, String)> = session
         .scores

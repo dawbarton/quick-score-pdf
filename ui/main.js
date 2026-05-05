@@ -127,7 +127,13 @@ function renderSession(s) {
     const li = document.createElement('li');
     li.className = 'file-item' + (file.score ? ` score-${file.score}` : '') + (i === currentIndex ? ' active' : '');
     li.dataset.index = i;
-    li.innerHTML = `<span class="dot"></span><span class="fname" title="${file.name}">${file.name}</span>`;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    const fname = document.createElement('span');
+    fname.className = 'fname';
+    fname.title = file.name;
+    fname.textContent = file.name;
+    li.append(dot, fname);
     li.addEventListener('click', () => onFileClick(i));
     fileListEl.appendChild(li);
   });
@@ -231,25 +237,30 @@ async function doExport() {
   catch (e) { if (e !== 'cancelled') console.error(e); }
 }
 
+// ── Session startup ────────────────────────────────────────────────────────────
+async function startSession(s) {
+  currentIndex = null;
+  currentScale = DEFAULT_SCALE;
+  fileViewState.clear();
+  renderSession(s);
+  welcomeEl.classList.add('hidden');
+  appEl.classList.remove('hidden');
+  doneOverlay.classList.add('hidden');
+  noFileEl.style.display = 'flex';
+  noFileEl.textContent = 'Select a file from the list';
+  pdfContainer.classList.add('hidden');
+  noteInput.value = '';
+
+  const first = s.files.findIndex(f => !f.score);
+  if (first !== -1) await openFile(first);
+  else if (s.files.length > 0) showDone(s);
+}
+
 // ── Folder selection ───────────────────────────────────────────────────────────
 async function openFolder() {
   try {
     const s = await invoke('select_folder');
-    currentIndex = null;
-    currentScale = DEFAULT_SCALE;
-    fileViewState.clear();
-    renderSession(s);
-    welcomeEl.classList.add('hidden');
-    appEl.classList.remove('hidden');
-    doneOverlay.classList.add('hidden');
-    noFileEl.style.display = 'flex';
-    noFileEl.textContent = 'Select a file from the list';
-    pdfContainer.classList.add('hidden');
-    noteInput.value = '';
-
-    const first = s.files.findIndex(f => !f.score);
-    if (first !== -1) await openFile(first);
-    else if (s.files.length > 0) showDone(s);
+    await startSession(s);
   } catch (e) {
     if (e !== 'cancelled') console.error(e);
   }
@@ -358,19 +369,7 @@ document.getElementById('clear-btn').addEventListener('click', async () => {
   try {
     const s = await invoke('get_cli_session');
     if (!s) return;
-    currentIndex = null;
-    currentScale = DEFAULT_SCALE;
-    fileViewState.clear();
-    renderSession(s);
-    welcomeEl.classList.add('hidden');
-    appEl.classList.remove('hidden');
-    noFileEl.style.display = 'flex';
-    noFileEl.textContent = 'Select a file from the list';
-    pdfContainer.classList.add('hidden');
-    noteInput.value = '';
-    const first = s.files.findIndex(f => !f.score);
-    if (first !== -1) await openFile(first);
-    else if (s.files.length > 0) showDone(s);
+    await startSession(s);
   } catch (e) {
     console.error('CLI session error:', e);
   }

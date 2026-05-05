@@ -22,7 +22,6 @@ tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 csv = "1"
-walkdir = "2"
 
 [profile.release]
 panic = "abort"

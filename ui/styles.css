@@ -20,7 +20,7 @@ html, body { height: 100%; font-family: system-ui, sans-serif; background: var(-
 
 /* ── Welcome ─────────────────────────────────────────── */
 #welcome { align-items: center; justify-content: center; }
-.welcome-card { text-align: center; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 48px 64px; }
+.welcome-card { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 48px 64px; }
 .welcome-card h1 { font-size: 2rem; margin-bottom: 8px; }
 .welcome-card p  { color: var(--muted); margin-bottom: 24px; }
 
@@ -87,7 +87,6 @@ html, body { height: 100%; font-family: system-ui, sans-serif; background: var(-
 .score-btn.unscore:hover { border-color: var(--border); }
 
 /* ── Welcome extras ──────────────────────────────────── */
-.welcome-card { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .welcome-card p { margin: 0; }
 .btn-link { background: none; border: none; color: var(--muted); font-size: 0.8rem; cursor: pointer; padding: 0; text-decoration: underline; }
 .btn-link:hover { color: var(--text); }
