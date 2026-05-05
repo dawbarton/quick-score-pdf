@@ -1,0 +1,211 @@
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use tauri::Manager;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Score {
+    Green,
+    Amber,
+    Red,
+}
+
+impl Score {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Score::Green => "green",
+            Score::Amber => "amber",
+            Score::Red => "red",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub folder: String,
+    /// filename -> score (None = unscored)
+    pub scores: BTreeMap<String, Option<Score>>,
+}
+
+impl Session {
+    fn state_path(folder: &Path) -> PathBuf {
+        folder.join("quickscore.json")
+    }
+
+    fn load_or_create(folder: &Path) -> Result<Session, String> {
+        let path = Self::state_path(folder);
+        let folder_str = folder.to_string_lossy().to_string();
+
+        // Scan folder for PDFs (alphabetical via BTreeMap)
+        let mut pdf_files: Vec<String> = fs::read_dir(folder)
+            .map_err(|e| e.to_string())?
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.to_lowercase().ends_with(".pdf") {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        pdf_files.sort();
+
+        if path.exists() {
+            let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            let mut session: Session = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+            session.folder = folder_str;
+
+            // Add any new PDFs not in saved state; remove entries no longer on disk
+            let mut updated_scores: BTreeMap<String, Option<Score>> = BTreeMap::new();
+            for name in &pdf_files {
+                updated_scores.insert(name.clone(), session.scores.remove(name).flatten());
+            }
+            session.scores = updated_scores;
+            Ok(session)
+        } else {
+            let scores = pdf_files.into_iter().map(|name| (name, None)).collect();
+            Ok(Session { folder: folder_str, scores })
+        }
+    }
+
+    fn save(&self) -> Result<(), String> {
+        let path = Self::state_path(Path::new(&self.folder));
+        let data = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        fs::write(path, data).map_err(|e| e.to_string())
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub score: Option<Score>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionView {
+    pub folder: String,
+    pub files: Vec<FileEntry>,
+}
+
+impl From<&Session> for SessionView {
+    fn from(s: &Session) -> Self {
+        SessionView {
+            folder: s.folder.clone(),
+            files: s
+                .scores
+                .iter()
+                .map(|(name, score)| FileEntry { name: name.clone(), score: score.clone() })
+                .collect(),
+        }
+    }
+}
+
+// ── Tauri commands ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn select_folder(app: tauri::AppHandle) -> Result<SessionView, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let folder = app
+        .dialog()
+        .file()
+        .blocking_pick_folder()
+        .ok_or_else(|| "cancelled".to_string())?;
+
+    let path = folder.as_path().ok_or("invalid path")?.to_path_buf();
+    let session = Session::load_or_create(&path)?;
+    session.save()?;
+
+    *app.state::<std::sync::Mutex<Option<Session>>>().lock().unwrap() = Some(session.clone());
+    Ok(SessionView::from(&session))
+}
+
+#[tauri::command]
+async fn get_session(app: tauri::AppHandle) -> Result<Option<SessionView>, String> {
+    let state = app.state::<std::sync::Mutex<Option<Session>>>();
+    let guard = state.lock().unwrap();
+    Ok(guard.as_ref().map(SessionView::from))
+}
+
+#[tauri::command]
+async fn set_score(app: tauri::AppHandle, filename: String, score: Option<Score>) -> Result<SessionView, String> {
+    let state = app.state::<std::sync::Mutex<Option<Session>>>();
+    let mut guard = state.lock().unwrap();
+    let session = guard.as_mut().ok_or("no session")?;
+    if session.scores.contains_key(&filename) {
+        session.scores.insert(filename, score);
+        session.save()?;
+        Ok(SessionView::from(&*session))
+    } else {
+        Err(format!("unknown file: {filename}"))
+    }
+}
+
+#[tauri::command]
+async fn get_pdf_url(app: tauri::AppHandle, filename: String) -> Result<String, String> {
+    let state = app.state::<std::sync::Mutex<Option<Session>>>();
+    let guard = state.lock().unwrap();
+    let session = guard.as_ref().ok_or("no session")?;
+    let path = Path::new(&session.folder).join(&filename);
+    if path.exists() {
+        Ok(path.to_string_lossy().to_string())
+    } else {
+        Err(format!("file not found: {filename}"))
+    }
+}
+
+#[tauri::command]
+async fn export_csv(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let state = app.state::<std::sync::Mutex<Option<Session>>>();
+    let guard = state.lock().unwrap();
+    let session = guard.as_ref().ok_or("no session")?;
+    let rows: Vec<(String, String)> = session
+        .scores
+        .iter()
+        .map(|(name, score)| {
+            (name.clone(), score.as_ref().map(Score::as_str).unwrap_or("unscored").to_string())
+        })
+        .collect();
+    drop(guard);
+
+    let save_path = app
+        .dialog()
+        .file()
+        .add_filter("CSV", &["csv"])
+        .set_file_name("scores.csv")
+        .blocking_save_file()
+        .ok_or_else(|| "cancelled".to_string())?;
+
+    let path = save_path.as_path().ok_or("invalid path")?.to_path_buf();
+    let mut wtr = csv::Writer::from_path(&path).map_err(|e| e.to_string())?;
+    wtr.write_record(["filename", "score"]).map_err(|e| e.to_string())?;
+    for (name, score) in rows {
+        wtr.write_record([&name, &score]).map_err(|e| e.to_string())?;
+    }
+    wtr.flush().map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+// ── App entry point ────────────────────────────────────────────────────────────
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_fs::init())
+        .manage(std::sync::Mutex::new(None::<Session>))
+        .invoke_handler(tauri::generate_handler![
+            select_folder,
+            get_session,
+            set_score,
+            get_pdf_url,
+            export_csv,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

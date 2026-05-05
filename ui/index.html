@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuickScore</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ── Welcome screen ─────────────────────────────────────────── -->
+  <div id="welcome" class="screen">
+    <div class="welcome-card">
+      <h1>QuickScore</h1>
+      <p>Score PDFs quickly using keyboard shortcuts or buttons.</p>
+      <button id="open-folder-btn" class="btn btn-primary">Open Folder…</button>
+    </div>
+  </div>
+
+  <!-- ── Main scoring screen ────────────────────────────────────── -->
+  <div id="app" class="screen hidden">
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <span id="folder-name" class="folder-name"></span>
+        <div class="sidebar-actions">
+          <button id="change-folder-btn" class="btn btn-sm">Change…</button>
+          <button id="export-btn" class="btn btn-sm btn-export">Export CSV</button>
+        </div>
+      </div>
+      <div class="progress-bar-wrap">
+        <div id="progress-bar" class="progress-bar"></div>
+        <span id="progress-text" class="progress-text"></span>
+      </div>
+      <ul id="file-list" class="file-list"></ul>
+    </div>
+
+    <div class="viewer-pane">
+      <div class="viewer-header">
+        <span id="current-filename" class="current-filename"></span>
+        <div class="viewer-controls">
+          <div class="zoom-controls">
+            <button id="zoom-out-btn" class="btn btn-sm" title="Zoom out (-)">−</button>
+            <span id="zoom-level" class="zoom-level">150%</span>
+            <button id="zoom-in-btn"  class="btn btn-sm" title="Zoom in (+)">+</button>
+            <button id="zoom-reset-btn" class="btn btn-sm" title="Reset zoom (0)">Reset</button>
+          </div>
+          <div class="nav-buttons">
+            <button id="prev-btn" class="btn btn-sm" title="Previous file (←)">◀ Prev</button>
+            <button id="next-btn" class="btn btn-sm" title="Next file (→)">Next ▶</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="viewer-area" class="viewer-area">
+        <div id="no-file" class="no-file-msg">Select a file from the list</div>
+        <div id="pdf-container" class="pdf-container hidden"></div>
+        <div id="pdf-loading" class="no-file-msg hidden">Loading…</div>
+      </div>
+
+      <div class="score-bar">
+        <span class="score-label">Score:</span>
+        <button class="score-btn green"  data-score="green" title="Green (1 or G)">
+          <span class="score-dot"></span> Green
+        </button>
+        <button class="score-btn amber"  data-score="amber" title="Amber (2 or A)">
+          <span class="score-dot"></span> Amber
+        </button>
+        <button class="score-btn red"    data-score="red"   title="Red (3 or R)">
+          <span class="score-dot"></span> Red
+        </button>
+        <button class="score-btn unscore" id="clear-btn" title="Clear score">
+          ✕ Clear
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Done overlay ───────────────────────────────────────────── -->
+  <div id="done-overlay" class="overlay hidden">
+    <div class="done-card">
+      <div class="done-icon">✓</div>
+      <h2>All files scored!</h2>
+      <p id="done-summary"></p>
+      <div class="done-actions">
+        <button id="done-export-btn" class="btn btn-primary">Export CSV</button>
+        <button id="done-review-btn" class="btn">Review scores</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Rescore confirmation dialog ───────────────────────────── -->
+  <div id="rescore-overlay" class="overlay hidden">
+    <div class="dialog-card">
+      <p id="rescore-msg"></p>
+      <div class="dialog-actions">
+        <button id="rescore-confirm-btn" class="btn btn-primary">Rescore</button>
+        <button id="rescore-cancel-btn" class="btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
