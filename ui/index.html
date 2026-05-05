@@ -58,6 +58,10 @@
         <div id="pdf-loading" class="no-file-msg hidden">Loading…</div>
       </div>
 
+      <div id="note-panel" class="note-panel">
+        <textarea id="note-input" class="note-input" placeholder="No note — press N to add one" rows="2"></textarea>
+      </div>
+
       <div class="score-bar">
         <span class="score-label">Score:</span>
         <button class="score-btn green"  data-score="green" title="Green (1 or G)">
@@ -103,6 +107,7 @@
             <div><dt><kbd>1</kbd> <kbd>G</kbd></dt><dd>Score green</dd></div>
             <div><dt><kbd>2</kbd> <kbd>A</kbd></dt><dd>Score amber</dd></div>
             <div><dt><kbd>3</kbd> <kbd>R</kbd></dt><dd>Score red</dd></div>
+            <div><dt><kbd>N</kbd></dt><dd>Edit note</dd></div>
           </dl>
         </section>
         <section>
@@ -132,17 +137,6 @@
     </div>
   </div>
 
-  <!-- ── Rescore confirmation dialog ───────────────────────────── -->
-  <div id="rescore-overlay" class="overlay hidden">
-    <div class="dialog-card">
-      <p id="rescore-msg"></p>
-      <div class="dialog-actions">
-        <button id="rescore-confirm-btn" class="btn btn-primary">Rescore</button>
-        <button id="rescore-cancel-btn" class="btn">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <script type="module" src="main.js"></script>
+<script type="module" src="main.js"></script>
 </body>
 </html>

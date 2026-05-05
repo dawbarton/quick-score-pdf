@@ -66,6 +66,12 @@ html, body { height: 100%; font-family: system-ui, sans-serif; background: var(-
 .pdf-container { position: absolute; inset: 0; overflow-y: auto; background: #525659; outline: none; }
 .pdf-page { display: block; margin: 12px auto; box-shadow: 0 2px 8px #0006; }
 
+/* ── Note panel ──────────────────────────────────────── */
+.note-panel { padding: 6px 14px; border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+.note-input { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; font-size: 0.82rem; resize: none; font-family: system-ui, sans-serif; line-height: 1.4; }
+.note-input:focus { outline: none; border-color: #3b82f6; }
+.note-input::placeholder { color: var(--muted); font-style: italic; }
+
 /* ── Score bar ───────────────────────────────────────── */
 .score-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--border); flex-shrink: 0; background: var(--surface); }
 .score-label { font-size: 0.82rem; color: var(--muted); }

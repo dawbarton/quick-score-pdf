@@ -6,7 +6,7 @@ const { invoke, convertFileSrc } = window.__TAURI__.core;
 window.addEventListener('unhandledrejection', e => console.error('Unhandled rejection:', e.reason));
 
 // ── State ──────────────────────────────────────────────────────────────────────
-let session = null;       // { folder, files: [{name, score}] }
+let session = null;       // { folder, files: [{name, score, note}] }
 let currentIndex = null;
 const fileViewState = new Map(); // filename → { scale, scrollTop }
 
@@ -23,8 +23,8 @@ const progressBar     = document.getElementById('progress-bar');
 const progressText    = document.getElementById('progress-text');
 const doneOverlay     = document.getElementById('done-overlay');
 const doneSummary     = document.getElementById('done-summary');
-const rescoreOverlay  = document.getElementById('rescore-overlay');
-const rescoreMsg      = document.getElementById('rescore-msg');
+const shortcutsOverlay = document.getElementById('shortcuts-overlay');
+const noteInput       = document.getElementById('note-input');
 
 // ── PDF rendering ──────────────────────────────────────────────────────────────
 const ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
@@ -154,6 +154,7 @@ async function openFile(index) {
   const file = session.files[index];
   currentFilename.textContent = file.name;
   updateScoreButtons(file.score ?? null);
+  noteInput.value = file.note ?? '';
 
   document.querySelectorAll('.file-item').forEach((li, i) =>
     li.classList.toggle('active', i === index));
@@ -200,30 +201,27 @@ function showDone(s) {
   doneOverlay.classList.remove('hidden');
 }
 
-// ── Rescore confirmation ───────────────────────────────────────────────────────
-function confirmRescore(index) {
-  return new Promise(resolve => {
-    const file = session.files[index];
-    rescoreMsg.textContent = `"${file.name}" is already scored ${file.score}. Rescore it?`;
-    rescoreOverlay.classList.remove('hidden');
+// ── Note saving ────────────────────────────────────────────────────────────────
+let noteOriginalValue = '';
 
-    const onConfirm = () => { cleanup(); resolve(true); };
-    const onCancel  = () => { cleanup(); resolve(false); };
-    function cleanup() {
-      rescoreOverlay.classList.add('hidden');
-      document.getElementById('rescore-confirm-btn').removeEventListener('click', onConfirm);
-      document.getElementById('rescore-cancel-btn').removeEventListener('click', onCancel);
-    }
-    document.getElementById('rescore-confirm-btn').addEventListener('click', onConfirm);
-    document.getElementById('rescore-cancel-btn').addEventListener('click', onCancel);
-  });
-}
+noteInput.addEventListener('focus', () => {
+  noteOriginalValue = noteInput.value;
+});
 
-async function onFileClick(i) {
-  const file = session.files[i];
-  if (file.score && i !== currentIndex) {
-    if (!await confirmRescore(i)) return;
+noteInput.addEventListener('blur', async () => {
+  if (currentIndex === null) return;
+  const file = session.files[currentIndex];
+  const note = noteInput.value;
+  try {
+    await invoke('set_note', { filename: file.name, note });
+    session.files[currentIndex] = { ...file, note: note || null };
+  } catch (e) {
+    console.error('Failed to save note:', e);
   }
+});
+
+// ── File click ─────────────────────────────────────────────────────────────────
+async function onFileClick(i) {
   await openFile(i);
 }
 
@@ -247,6 +245,7 @@ async function openFolder() {
     noFileEl.style.display = 'flex';
     noFileEl.textContent = 'Select a file from the list';
     pdfContainer.classList.add('hidden');
+    noteInput.value = '';
 
     const first = s.files.findIndex(f => !f.score);
     if (first !== -1) await openFile(first);
@@ -257,8 +256,6 @@ async function openFolder() {
 }
 
 // ── Shortcuts overlay ──────────────────────────────────────────────────────────
-const shortcutsOverlay = document.getElementById('shortcuts-overlay');
-
 function toggleShortcuts() { shortcutsOverlay.classList.toggle('hidden'); }
 function closeShortcuts()  { shortcutsOverlay.classList.add('hidden'); }
 
@@ -271,6 +268,19 @@ shortcutsOverlay.addEventListener('click', e => { if (e.target === shortcutsOver
 document.addEventListener('keydown', async (e) => {
   const key = e.key.toLowerCase();
 
+  // If focus is in the note textarea, handle Escape (cancel) and Cmd+Enter (save)
+  if (e.target === noteInput) {
+    if (key === 'escape') {
+      e.preventDefault();
+      noteInput.value = noteOriginalValue; // revert
+      noteInput.blur();
+    } else if (key === 'enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      noteInput.blur(); // triggers save via blur handler
+    }
+    return;
+  }
+
   // Global shortcuts — always active
   if (e.metaKey || e.ctrlKey) {
     if (key === 'o') { e.preventDefault(); openFolder(); return; }
@@ -279,20 +289,21 @@ document.addEventListener('keydown', async (e) => {
   if (e.key === '?') { e.preventDefault(); toggleShortcuts(); return; }
   if (key === 'escape') {
     closeShortcuts();
-    rescoreOverlay.classList.add('hidden');
     doneOverlay.classList.add('hidden');
     return;
   }
 
   // Everything below requires no overlay open and a file selected
   if (!shortcutsOverlay.classList.contains('hidden')) return;
-  if (!rescoreOverlay.classList.contains('hidden')) return;
   if (currentIndex === null) return;
 
   // Scoring
   if      (key === '1' || key === 'g') { e.preventDefault(); await applyScore('green'); }
   else if (key === '2' || key === 'a') { e.preventDefault(); await applyScore('amber'); }
   else if (key === '3' || key === 'r') { e.preventDefault(); await applyScore('red'); }
+
+  // Note
+  else if (key === 'n') { e.preventDefault(); noteInput.focus(); }
 
   // File navigation — left/right
   else if (key === 'arrowleft') {
@@ -356,6 +367,7 @@ document.getElementById('clear-btn').addEventListener('click', async () => {
     noFileEl.style.display = 'flex';
     noFileEl.textContent = 'Select a file from the list';
     pdfContainer.classList.add('hidden');
+    noteInput.value = '';
     const first = s.files.findIndex(f => !f.score);
     if (first !== -1) await openFile(first);
     else if (s.files.length > 0) showDone(s);

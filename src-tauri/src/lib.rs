@@ -31,6 +31,9 @@ pub struct Session {
     pub filter: Option<Vec<String>>,
     /// filename -> score (None = unscored)
     pub scores: BTreeMap<String, Option<Score>>,
+    /// filename -> note text (absent = no note)
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub notes: BTreeMap<String, String>,
 }
 
 impl Session {
@@ -57,23 +60,29 @@ impl Session {
         };
         pdf_files.sort();
 
-        // Carry over any existing scores from the state file
-        let mut saved_scores: BTreeMap<String, Option<Score>> = if path.exists() {
-            fs::read_to_string(&path)
-                .ok()
-                .and_then(|data| serde_json::from_str::<Session>(&data).ok())
-                .map(|s| s.scores)
-                .unwrap_or_default()
-        } else {
-            BTreeMap::new()
-        };
+        // Carry over any existing scores and notes from the state file
+        let (mut saved_scores, saved_notes): (BTreeMap<String, Option<Score>>, BTreeMap<String, String>) =
+            if path.exists() {
+                fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|data| serde_json::from_str::<Session>(&data).ok())
+                    .map(|s| (s.scores, s.notes))
+                    .unwrap_or_default()
+            } else {
+                Default::default()
+            };
 
         let scores = pdf_files
-            .into_iter()
-            .map(|name| { let score = saved_scores.remove(&name).flatten(); (name, score) })
+            .iter()
+            .map(|name| (name.clone(), saved_scores.remove(name).flatten()))
             .collect();
 
-        Ok(Session { folder: folder_str, filter, scores })
+        let notes = pdf_files
+            .iter()
+            .filter_map(|name| saved_notes.get(name).cloned().map(|n| (name.clone(), n)))
+            .collect();
+
+        Ok(Session { folder: folder_str, filter, scores, notes })
     }
 
     fn save(&self) -> Result<(), String> {
@@ -87,6 +96,7 @@ impl Session {
 pub struct FileEntry {
     pub name: String,
     pub score: Option<Score>,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -102,7 +112,11 @@ impl From<&Session> for SessionView {
             files: s
                 .scores
                 .iter()
-                .map(|(name, score)| FileEntry { name: name.clone(), score: score.clone() })
+                .map(|(name, score)| FileEntry {
+                    name: name.clone(),
+                    score: score.clone(),
+                    note: s.notes.get(name).cloned(),
+                })
                 .collect(),
         }
     }
@@ -205,6 +219,22 @@ async fn set_score(app: tauri::AppHandle, filename: String, score: Option<Score>
 }
 
 #[tauri::command]
+async fn set_note(app: tauri::AppHandle, filename: String, note: String) -> Result<(), String> {
+    let state = app.state::<std::sync::Mutex<Option<Session>>>();
+    let mut guard = state.lock().unwrap();
+    let session = guard.as_mut().ok_or("no session")?;
+    if !session.scores.contains_key(&filename) {
+        return Err(format!("unknown file: {filename}"));
+    }
+    if note.is_empty() {
+        session.notes.remove(&filename);
+    } else {
+        session.notes.insert(filename, note);
+    }
+    session.save()
+}
+
+#[tauri::command]
 async fn get_pdf_url(app: tauri::AppHandle, filename: String) -> Result<String, String> {
     let state = app.state::<std::sync::Mutex<Option<Session>>>();
     let guard = state.lock().unwrap();
@@ -224,11 +254,13 @@ async fn export_csv(app: tauri::AppHandle) -> Result<String, String> {
     let state = app.state::<std::sync::Mutex<Option<Session>>>();
     let guard = state.lock().unwrap();
     let session = guard.as_ref().ok_or("no session")?;
-    let rows: Vec<(String, String)> = session
+    let rows: Vec<(String, String, String)> = session
         .scores
         .iter()
         .map(|(name, score)| {
-            (name.clone(), score.as_ref().map(Score::as_str).unwrap_or("unscored").to_string())
+            let score_str = score.as_ref().map(Score::as_str).unwrap_or("unscored").to_string();
+            let note_str = session.notes.get(name).cloned().unwrap_or_default();
+            (name.clone(), score_str, note_str)
         })
         .collect();
     drop(guard);
@@ -243,9 +275,9 @@ async fn export_csv(app: tauri::AppHandle) -> Result<String, String> {
 
     let path = save_path.as_path().ok_or("invalid path")?.to_path_buf();
     let mut wtr = csv::Writer::from_path(&path).map_err(|e| e.to_string())?;
-    wtr.write_record(["filename", "score"]).map_err(|e| e.to_string())?;
-    for (name, score) in rows {
-        wtr.write_record([&name, &score]).map_err(|e| e.to_string())?;
+    wtr.write_record(["filename", "score", "note"]).map_err(|e| e.to_string())?;
+    for (name, score, note) in rows {
+        wtr.write_record([&name, &score, &note]).map_err(|e| e.to_string())?;
     }
     wtr.flush().map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
@@ -264,6 +296,7 @@ pub fn run() {
             get_session,
             get_cli_session,
             set_score,
+            set_note,
             get_pdf_url,
             export_csv,
         ])
