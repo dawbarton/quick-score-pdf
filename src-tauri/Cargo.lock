@@ -2436,7 +2436,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "quick-score"
+name = "quick-score-pdf"
 version = "0.1.0"
 dependencies = [
  "csv",

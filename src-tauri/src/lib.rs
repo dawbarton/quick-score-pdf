@@ -38,7 +38,7 @@ pub struct Session {
 
 impl Session {
     fn state_path(folder: &Path) -> PathBuf {
-        folder.join("quickscore.json")
+        folder.join("quick-score-pdf.json")
     }
 
     /// `filter` is `Some(filenames)` for CLI file-list mode, `None` for full-folder mode.
