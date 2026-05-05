@@ -13,6 +13,7 @@
       <h1>QuickScore</h1>
       <p>Score PDFs quickly using keyboard shortcuts or buttons.</p>
       <button id="open-folder-btn" class="btn btn-primary">Open Folder…</button>
+      <button id="welcome-shortcuts-btn" class="btn-link">View keyboard shortcuts</button>
     </div>
   </div>
 
@@ -47,6 +48,7 @@
             <button id="prev-btn" class="btn btn-sm" title="Previous file (←)">◀ Prev</button>
             <button id="next-btn" class="btn btn-sm" title="Next file (→)">Next ▶</button>
           </div>
+          <button id="shortcuts-btn" class="btn btn-sm" title="Keyboard shortcuts (?)">?</button>
         </div>
       </div>
 
@@ -83,6 +85,49 @@
       <div class="done-actions">
         <button id="done-export-btn" class="btn btn-primary">Export CSV</button>
         <button id="done-review-btn" class="btn">Review scores</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Keyboard shortcuts overlay ───────────────────────────── -->
+  <div id="shortcuts-overlay" class="overlay hidden">
+    <div class="shortcuts-card">
+      <div class="shortcuts-header">
+        <h3>Keyboard Shortcuts</h3>
+        <button id="shortcuts-close-btn" class="btn btn-sm">✕</button>
+      </div>
+      <div class="shortcuts-body">
+        <section>
+          <h4>Scoring</h4>
+          <dl>
+            <div><dt><kbd>1</kbd> <kbd>G</kbd></dt><dd>Score green</dd></div>
+            <div><dt><kbd>2</kbd> <kbd>A</kbd></dt><dd>Score amber</dd></div>
+            <div><dt><kbd>3</kbd> <kbd>R</kbd></dt><dd>Score red</dd></div>
+          </dl>
+        </section>
+        <section>
+          <h4>Navigation</h4>
+          <dl>
+            <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Previous / next file</dd></div>
+          </dl>
+        </section>
+        <section>
+          <h4>PDF viewer</h4>
+          <dl>
+            <div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Scroll up / down</dd></div>
+            <div><dt><kbd>+</kbd> <kbd>−</kbd></dt><dd>Zoom in / out</dd></div>
+            <div><dt><kbd>0</kbd></dt><dd>Reset zoom</dd></div>
+          </dl>
+        </section>
+        <section>
+          <h4>App</h4>
+          <dl>
+            <div><dt><kbd>⌘O</kbd></dt><dd>Open folder</dd></div>
+            <div><dt><kbd>⌘E</kbd></dt><dd>Export CSV</dd></div>
+            <div><dt><kbd>?</kbd></dt><dd>Show this panel</dd></div>
+            <div><dt><kbd>Esc</kbd></dt><dd>Close overlay</dd></div>
+          </dl>
+        </section>
       </div>
     </div>
   </div>

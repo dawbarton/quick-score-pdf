@@ -25,6 +25,10 @@ impl Score {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub folder: String,
+    /// When Some, only these filenames are part of the session (CLI file-list mode).
+    /// When None, all PDFs in the folder are included.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<Vec<String>>,
     /// filename -> score (None = unscored)
     pub scores: BTreeMap<String, Option<Score>>,
 }
@@ -34,41 +38,42 @@ impl Session {
         folder.join("quickscore.json")
     }
 
-    fn load_or_create(folder: &Path) -> Result<Session, String> {
+    /// `filter` is `Some(filenames)` for CLI file-list mode, `None` for full-folder mode.
+    fn load_or_create(folder: &Path, filter: Option<Vec<String>>) -> Result<Session, String> {
         let path = Self::state_path(folder);
         let folder_str = folder.to_string_lossy().to_string();
 
-        // Scan folder for PDFs (alphabetical via BTreeMap)
-        let mut pdf_files: Vec<String> = fs::read_dir(folder)
-            .map_err(|e| e.to_string())?
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.to_lowercase().ends_with(".pdf") {
-                    Some(name)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Determine the file list for this session
+        let mut pdf_files: Vec<String> = match &filter {
+            Some(names) => names.clone(),
+            None => fs::read_dir(folder)
+                .map_err(|e| e.to_string())?
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.to_lowercase().ends_with(".pdf") { Some(name) } else { None }
+                })
+                .collect(),
+        };
         pdf_files.sort();
 
-        if path.exists() {
-            let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            let mut session: Session = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-            session.folder = folder_str;
-
-            // Add any new PDFs not in saved state; remove entries no longer on disk
-            let mut updated_scores: BTreeMap<String, Option<Score>> = BTreeMap::new();
-            for name in &pdf_files {
-                updated_scores.insert(name.clone(), session.scores.remove(name).flatten());
-            }
-            session.scores = updated_scores;
-            Ok(session)
+        // Carry over any existing scores from the state file
+        let mut saved_scores: BTreeMap<String, Option<Score>> = if path.exists() {
+            fs::read_to_string(&path)
+                .ok()
+                .and_then(|data| serde_json::from_str::<Session>(&data).ok())
+                .map(|s| s.scores)
+                .unwrap_or_default()
         } else {
-            let scores = pdf_files.into_iter().map(|name| (name, None)).collect();
-            Ok(Session { folder: folder_str, scores })
-        }
+            BTreeMap::new()
+        };
+
+        let scores = pdf_files
+            .into_iter()
+            .map(|name| { let score = saved_scores.remove(&name).flatten(); (name, score) })
+            .collect();
+
+        Ok(Session { folder: folder_str, filter, scores })
     }
 
     fn save(&self) -> Result<(), String> {
@@ -103,6 +108,61 @@ impl From<&Session> for SessionView {
     }
 }
 
+// ── CLI argument handling ──────────────────────────────────────────────────────
+
+enum CliInput {
+    Dir(PathBuf),
+    Files { dir: PathBuf, names: Vec<String> },
+}
+
+fn parse_cli_input() -> Option<CliInput> {
+    let args: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|a| !a.starts_with('-'))
+        .collect();
+
+    if args.is_empty() { return None; }
+
+    // Single directory argument
+    let first = PathBuf::from(&args[0]);
+    if first.is_dir() {
+        return Some(CliInput::Dir(first));
+    }
+
+    // One or more PDF file arguments
+    let pdfs: Vec<PathBuf> = args.iter()
+        .map(PathBuf::from)
+        .filter(|p| {
+            p.extension().map(|e| e.eq_ignore_ascii_case("pdf")).unwrap_or(false) && p.exists()
+        })
+        .collect();
+
+    if pdfs.is_empty() { return None; }
+
+    // Resolve all paths to their canonical form and use the parent of the first
+    let dir = pdfs[0].parent()?.to_path_buf();
+    let names = pdfs.iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .collect();
+
+    Some(CliInput::Files { dir, names })
+}
+
+#[tauri::command]
+async fn get_cli_session(app: tauri::AppHandle) -> Result<Option<SessionView>, String> {
+    let Some(input) = parse_cli_input() else { return Ok(None); };
+
+    let (dir, filter) = match input {
+        CliInput::Dir(dir)            => (dir, None),
+        CliInput::Files { dir, names } => (dir, Some(names)),
+    };
+
+    let session = Session::load_or_create(&dir, filter)?;
+    session.save()?;
+    *app.state::<std::sync::Mutex<Option<Session>>>().lock().unwrap() = Some(session.clone());
+    Ok(Some(SessionView::from(&session)))
+}
+
 // ── Tauri commands ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -116,7 +176,7 @@ async fn select_folder(app: tauri::AppHandle) -> Result<SessionView, String> {
         .ok_or_else(|| "cancelled".to_string())?;
 
     let path = folder.as_path().ok_or("invalid path")?.to_path_buf();
-    let session = Session::load_or_create(&path)?;
+    let session = Session::load_or_create(&path, None)?;
     session.save()?;
 
     *app.state::<std::sync::Mutex<Option<Session>>>().lock().unwrap() = Some(session.clone());
@@ -202,6 +262,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             select_folder,
             get_session,
+            get_cli_session,
             set_score,
             get_pdf_url,
             export_csv,

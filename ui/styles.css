@@ -80,6 +80,12 @@ html, body { height: 100%; font-family: system-ui, sans-serif; background: var(-
 .score-btn.unscore { color: var(--muted); }
 .score-btn.unscore:hover { border-color: var(--border); }
 
+/* ── Welcome extras ──────────────────────────────────── */
+.welcome-card { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.welcome-card p { margin: 0; }
+.btn-link { background: none; border: none; color: var(--muted); font-size: 0.8rem; cursor: pointer; padding: 0; text-decoration: underline; }
+.btn-link:hover { color: var(--text); }
+
 /* ── Overlays ────────────────────────────────────────── */
 .overlay { position: fixed; inset: 0; background: #00000099; display: flex; align-items: center; justify-content: center; z-index: 100; }
 .done-card, .dialog-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 40px 48px; text-align: center; max-width: 400px; }
@@ -87,3 +93,15 @@ html, body { height: 100%; font-family: system-ui, sans-serif; background: var(-
 .done-card h2 { margin-bottom: 8px; }
 .done-card p, .dialog-card p { color: var(--muted); margin-bottom: 24px; font-size: 0.9rem; }
 .done-actions, .dialog-actions { display: flex; gap: 10px; justify-content: center; }
+
+/* ── Shortcuts panel ─────────────────────────────────── */
+.shortcuts-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px 28px; width: 420px; max-height: 80vh; overflow-y: auto; }
+.shortcuts-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.shortcuts-header h3 { font-size: 1rem; font-weight: 600; }
+.shortcuts-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 28px; }
+.shortcuts-body section h4 { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 8px; }
+.shortcuts-body dl { display: flex; flex-direction: column; gap: 6px; }
+.shortcuts-body dl div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.shortcuts-body dt { display: flex; gap: 4px; flex-shrink: 0; }
+.shortcuts-body dd { color: var(--muted); font-size: 0.82rem; text-align: right; }
+kbd { display: inline-block; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-family: monospace; font-size: 0.78rem; color: var(--text); line-height: 1.6; }

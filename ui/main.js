@@ -256,12 +256,38 @@ async function openFolder() {
   }
 }
 
+// ── Shortcuts overlay ──────────────────────────────────────────────────────────
+const shortcutsOverlay = document.getElementById('shortcuts-overlay');
+
+function toggleShortcuts() { shortcutsOverlay.classList.toggle('hidden'); }
+function closeShortcuts()  { shortcutsOverlay.classList.add('hidden'); }
+
+document.getElementById('shortcuts-btn').addEventListener('click', toggleShortcuts);
+document.getElementById('welcome-shortcuts-btn').addEventListener('click', toggleShortcuts);
+document.getElementById('shortcuts-close-btn').addEventListener('click', closeShortcuts);
+shortcutsOverlay.addEventListener('click', e => { if (e.target === shortcutsOverlay) closeShortcuts(); });
+
 // ── Keyboard shortcuts ─────────────────────────────────────────────────────────
 document.addEventListener('keydown', async (e) => {
+  const key = e.key.toLowerCase();
+
+  // Global shortcuts — always active
+  if (e.metaKey || e.ctrlKey) {
+    if (key === 'o') { e.preventDefault(); openFolder(); return; }
+    if (key === 'e') { e.preventDefault(); doExport(); return; }
+  }
+  if (e.key === '?') { e.preventDefault(); toggleShortcuts(); return; }
+  if (key === 'escape') {
+    closeShortcuts();
+    rescoreOverlay.classList.add('hidden');
+    doneOverlay.classList.add('hidden');
+    return;
+  }
+
+  // Everything below requires no overlay open and a file selected
+  if (!shortcutsOverlay.classList.contains('hidden')) return;
   if (!rescoreOverlay.classList.contains('hidden')) return;
   if (currentIndex === null) return;
-
-  const key = e.key.toLowerCase();
 
   // Scoring
   if      (key === '1' || key === 'g') { e.preventDefault(); await applyScore('green'); }
@@ -282,7 +308,7 @@ document.addEventListener('keydown', async (e) => {
   else if (key === 'arrowup')   { e.preventDefault(); pdfContainer.scrollBy({ top: -200, behavior: 'smooth' }); }
   else if (key === 'arrowdown') { e.preventDefault(); pdfContainer.scrollBy({ top:  200, behavior: 'smooth' }); }
 
-  // Zoom — +/- /0  (with or without Cmd/Ctrl)
+  // Zoom — +/- /0
   else if (key === '+' || key === '=') { e.preventDefault(); await zoomBy(+1); }
   else if (key === '-')                { e.preventDefault(); await zoomBy(-1); }
   else if (key === '0')                { e.preventDefault(); await zoomReset(); }
@@ -315,3 +341,25 @@ document.getElementById('clear-btn').addEventListener('click', async () => {
   currentIndex = updated.files.findIndex(f => f.name === file.name);
   updateScoreButtons(null);
 });
+
+// ── CLI startup ────────────────────────────────────────────────────────────────
+(async () => {
+  try {
+    const s = await invoke('get_cli_session');
+    if (!s) return;
+    currentIndex = null;
+    currentScale = DEFAULT_SCALE;
+    fileViewState.clear();
+    renderSession(s);
+    welcomeEl.classList.add('hidden');
+    appEl.classList.remove('hidden');
+    noFileEl.style.display = 'flex';
+    noFileEl.textContent = 'Select a file from the list';
+    pdfContainer.classList.add('hidden');
+    const first = s.files.findIndex(f => !f.score);
+    if (first !== -1) await openFile(first);
+    else if (s.files.length > 0) showDone(s);
+  } catch (e) {
+    console.error('CLI session error:', e);
+  }
+})();
