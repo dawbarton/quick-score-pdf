@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "test:ui": "node tests/ui/run.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

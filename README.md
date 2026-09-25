@@ -159,6 +159,15 @@ npm run dev
 
 Opens the app in a native window. The Rust backend recompiles on change; the frontend reloads on file save.
 
+### Tests
+
+```sh
+cd src-tauri && cargo test   # session loading and saving, CLI parsing
+npm run test:ui              # front end, in headless Chrome
+```
+
+The front-end tests (`tests/ui/`) serve `ui/` with the Tauri bridge replaced by a stub whose replies arrive after random delays, generate small test PDFs, and drive the page in headless Google Chrome (set `CHROME` if it is not at the default macOS path). Each file in `tests/ui/cases/` is one test. They exercise the front end's logic in Chrome, not the real app's WebKit view or backend.
+
 ### Production build
 
 ```sh
