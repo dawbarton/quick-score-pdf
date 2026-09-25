@@ -203,16 +203,25 @@ async function openFile(index) {
 }
 
 // ── Scoring ────────────────────────────────────────────────────────────────────
-async function applyScore(score) {
-  if (currentIndex === null) return;
-  const file = session.files[currentIndex];
-  const updated = await invoke('set_score', { filename: file.name, score });
-  renderSession(updated);
-  currentIndex = updated.files.findIndex(f => f.name === file.name);
+let scoreInFlight = false;
 
-  const nextUnscored = findNextUnscored(currentIndex);
-  if (nextUnscored !== null) await openFile(nextUnscored);
-  else showDone(updated);
+async function applyScore(score) {
+  // Only score the file actually on screen, and one score at a time
+  if (currentIndex === null || pdfLoadInProgress || scoreInFlight) return;
+  scoreInFlight = true;
+  try {
+    const file = session.files[currentIndex];
+    const updated = await invoke('set_score', { filename: file.name, score });
+    renderSession(updated);
+    currentIndex = updated.files.findIndex(f => f.name === file.name);
+
+    const nextUnscored = findNextUnscored(currentIndex);
+    if (nextUnscored === null) { showDone(updated); return; }
+    scoreInFlight = false;  // openFile sets pdfLoadInProgress, which now blocks scoring
+    await openFile(nextUnscored);
+  } finally {
+    scoreInFlight = false;
+  }
 }
 
 function findNextUnscored(fromIndex) {
@@ -330,6 +339,8 @@ document.addEventListener('keydown', async (e) => {
   if (e.metaKey || e.ctrlKey) {
     if (key === 'o') { e.preventDefault(); openFolder(); return; }
     if (key === 'e') { e.preventDefault(); doExport(); return; }
+    // Leave every other Cmd/Ctrl combination (Cmd+R, Cmd+A, …) alone, except zoom
+    if (!['+', '=', '-', '0'].includes(key)) return;
   }
   if (e.key === '?') { e.preventDefault(); toggleShortcuts(); return; }
   if (key === 'escape') {
@@ -342,7 +353,8 @@ document.addEventListener('keydown', async (e) => {
   if (!shortcutsOverlay.classList.contains('hidden')) return;
   if (currentIndex === null) return;
 
-  // Scoring
+  // Scoring (never on key repeat, so holding a key cannot score a run of unseen files)
+  if (e.repeat && ['1', '2', '3', 'g', 'a', 'r'].includes(key)) { e.preventDefault(); return; }
   if      (key === '1' || key === 'g') { e.preventDefault(); await applyScore('green'); }
   else if (key === '2' || key === 'a') { e.preventDefault(); await applyScore('amber'); }
   else if (key === '3' || key === 'r') { e.preventDefault(); await applyScore('red'); }
