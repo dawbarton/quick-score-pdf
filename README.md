@@ -52,16 +52,21 @@ quick-score-pdf /path/to/pdfs/a.pdf /path/to/pdfs/b.pdf
 
 All files must be in the same folder. If an argument is neither a folder nor an existing PDF, or the files are in different folders, the app opens on the welcome screen and shows the error.
 
-In file-list mode only the named PDFs appear in the session; the `quick-score-pdf.json` state file records the subset so the same selection is restored on relaunch.
+In file-list mode only the named PDFs appear in the session. The `filter` key in the state file records the subset for information only: opening the folder from within the app always shows every PDF in it, and the other files' scores are kept either way.
 
 ---
 
 ## State file (`quick-score-pdf.json`)
 
-A JSON file written to the PDF folder whenever a score or note changes. Example:
+A JSON file written to the PDF folder whenever a score or note changes, and created with every PDF unscored when a folder is first opened. Example:
 
 ```json
 {
+  "_format": [
+    "Written by QuickScorePDF and read back whenever this folder is opened. …",
+    "scores: one entry per PDF, keyed by its exact filename …",
+    "…"
+  ],
   "folder": "/Users/alice/papers",
   "scores": {
     "alpha.pdf": "green",
@@ -75,7 +80,17 @@ A JSON file written to the PDF folder whenever a score or note changes. Example:
 }
 ```
 
-`null` scores mean unscored. The `notes` key is omitted when there are no notes. In file-list mode a `filter` key lists the selected filenames.
+- `scores` maps each PDF's exact filename to `"green"`, `"amber"`, `"red"`, or `null` (unscored). PDFs in the folder with no entry start unscored.
+- `notes` maps filenames to free-text notes; files without a note are left out.
+- `_format` describes this structure in the file itself, since JSON has no comments. It, `folder`, and `filter` (the file list in file-list mode) are informational: they are rewritten on every save and ignored when reading.
+- Scores and notes for files that are not in the session (not in a command-line file list, or no longer in the folder) are kept in the file but not shown.
+- Saves write a temporary file and rename it, so the file is never left half-written. A file that cannot be parsed is moved aside to `quick-score-pdf.json.unreadable-<timestamp>` and the app says so; the folder then starts unscored.
+
+### Pre-populating scores
+
+1. Open the folder in QuickScorePDF once. This creates `quick-score-pdf.json` with every PDF listed as `null`.
+2. Give that file to a person or an agent to fill in `scores` and `notes`; the `_format` key explains what is allowed. The result must stay valid JSON.
+3. Reopen the folder in QuickScorePDF to review the scores.
 
 ---
 

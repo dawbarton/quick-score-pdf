@@ -22,17 +22,37 @@ impl Score {
     }
 }
 
+/// Written as the first key of every state file, so that anyone (or any agent) editing it by
+/// hand knows the expected structure. JSON has no comments, hence a key.
+const FORMAT_DESCRIPTION: &[&str] = &[
+    "Written by QuickScorePDF and read back whenever this folder is opened. It must stay valid JSON (no comments or trailing commas); a file that cannot be parsed is moved aside and the folder starts unscored.",
+    "scores: one entry per PDF, keyed by its exact filename (case-sensitive, including .pdf). Each value is \"green\", \"amber\", \"red\", or null for unscored. PDFs in the folder with no entry start unscored.",
+    "notes: an optional free-text note per PDF, keyed by the same filenames. Leave a file out for no note.",
+    "Entries for filenames that are not in the folder (or not in a command-line file list) are kept but not shown.",
+    "_format, folder, and filter are informational: they are rewritten on every save and ignored when reading.",
+];
+
+fn serialize_format<S: serde::Serializer>(_: &(), serializer: S) -> Result<S::Ok, S::Error> {
+    FORMAT_DESCRIPTION.serialize(serializer)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(rename = "_format", serialize_with = "serialize_format", skip_deserializing)]
+    format: (),
+    /// Informational in the file (the folder actually opened is used), so optional there
+    #[serde(default)]
     pub folder: String,
     /// When Some, only these filenames are part of the session (CLI file-list mode).
     /// When None, all PDFs in the folder are included.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<Vec<String>>,
     /// filename -> score (None = unscored)
+    #[serde(default)]
     pub scores: BTreeMap<String, Option<Score>>,
-    /// filename -> note text (absent = no note)
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// filename -> note text (absent = no note). Always written, even when empty, so that
+    /// its place in the file is visible to anyone editing it.
+    #[serde(default)]
     pub notes: BTreeMap<String, String>,
     /// Scores and notes from the state file for files outside this session (not listed on
     /// the command line, or no longer in the folder). Not shown, but written back on save so
@@ -124,6 +144,7 @@ impl Session {
         saved_scores.retain(|_, score| score.is_some());
 
         Ok(Session {
+            format: (),
             folder: folder_str,
             filter,
             scores,
@@ -414,6 +435,34 @@ mod tests {
         assert_eq!(on_disk.scores["b.pdf"], Some(Score::Red));
         assert_eq!(on_disk.notes["b.pdf"], "keep me");
         assert!(!Session::state_path(&dir).with_extension("json.tmp").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn state_file_describes_itself_and_reads_back() {
+        let dir = temp_dir("format");
+        touch(&dir, &["a.pdf", "b.pdf"]);
+        Session::load_or_create(&dir, None).unwrap().save().unwrap();
+        let text = fs::read_to_string(Session::state_path(&dir)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(text.trim_start().starts_with("{\n  \"_format\": ["), "{text}");
+        assert!(json["_format"].as_array().unwrap().len() >= 3);
+        assert_eq!(json["notes"], serde_json::json!({}));
+        assert_eq!(json["scores"], serde_json::json!({ "a.pdf": null, "b.pdf": null }));
+
+        // As an agent might write it: edited values, _format changed and folder dropped
+        // (both informational), and an unknown key (ignored)
+        fs::write(Session::state_path(&dir), r#"{
+            "_format": "anything",
+            "scores": { "a.pdf": "amber", "b.pdf": null, "gone.pdf": "red" },
+            "notes": { "a.pdf": "check section 2" },
+            "reviewer": "agent"
+        }"#).unwrap();
+        let s = Session::load_or_create(&dir, None).unwrap();
+        assert!(s.load_warning.is_none());
+        assert_eq!(s.scores["a.pdf"], Some(Score::Amber));
+        assert_eq!(s.notes["a.pdf"], "check section 2");
+        assert_eq!(s.retained_scores["gone.pdf"], Some(Score::Red));
         fs::remove_dir_all(&dir).unwrap();
     }
 
