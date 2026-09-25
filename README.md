@@ -220,6 +220,8 @@ export APPLE_TEAM_ID="TEAMID"
 
 See the [Tauri code signing guide](https://v2.tauri.app/distribute/sign/macos/) for full details.
 
+Without these variables the bundle is ad-hoc signed (`"signingIdentity": "-"` in `tauri.conf.json`): the whole bundle is sealed, which is enough to run it on the Mac that built it, but it is not notarised for distribution.
+
 #### Windows — code signing
 
 Set `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (or configure a certificate in `tauri.conf.json`). See the [Windows signing guide](https://v2.tauri.app/distribute/sign/windows/).
