@@ -5,6 +5,7 @@
 // Failures: set window.FAIL = { command: 'message' } to make a command reject, as Tauri does,
 // with that string; get_pdf_url then returns a path that does not exist. At page load, use the
 // query string instead: ?fail=command&warn=text (warn adds a load warning to the session).
+// ?preset=N starts with the first N files scored green.
 (() => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const state = {
@@ -15,6 +16,7 @@
   let inflight = 0;
   window.calls = [];
   const query = new URLSearchParams(location.search);
+  for (const f of state.files.slice(0, +(query.get('preset') ?? 0))) f.score = 'green';
   window.FAIL = query.has('fail') ? { [query.get('fail')]: 'stub failure' } : {};
 
   window.__TAURI__ = { core: {
@@ -58,6 +60,7 @@
       }
       throw new Error('settle: timed out');
     },
+    doneShown: () => !$('done-overlay').classList.contains('hidden'),
     error: () => $('error-banner').classList.contains('hidden') ? null : $('error-text').textContent,
     /**
      * What is on screen: header, highlighted row, page placeholders (their number identifies

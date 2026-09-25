@@ -322,10 +322,15 @@ async function applyScore(score) {
     renderSession(updated);
     currentIndex = updated.files.findIndex(f => f.name === file.name);
 
-    const nextUnscored = findNextUnscored(currentIndex);
-    if (nextUnscored === null) { showDone(updated); return; }
+    // Move on to the next unscored file. When none are left, celebrate only if this score
+    // completed the set; changing a score afterwards just moves on to the next file.
+    let next = findNextUnscored(currentIndex);
+    if (next === null) {
+      if (!file.score) { showDone(updated); return; }
+      next = (currentIndex + 1) % updated.files.length;
+    }
     scoreInFlight = false;  // openFile sets pdfLoadInProgress, which now blocks scoring
-    await openFile(nextUnscored);
+    await openFile(next);
   } finally {
     scoreInFlight = false;
   }
@@ -402,9 +407,8 @@ async function startSession(s) {
   pdfContainer.classList.add('hidden');
   noteInput.value = '';
 
-  const first = s.files.findIndex(f => !f.score);
-  if (first !== -1) await openFile(first);
-  else if (s.files.length > 0) showDone(s);
+  // Start at the first unscored file, or at the top if all are scored
+  if (s.files.length > 0) await openFile(Math.max(s.files.findIndex(f => !f.score), 0));
 }
 
 // ── Folder selection ───────────────────────────────────────────────────────────

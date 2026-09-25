@@ -36,7 +36,7 @@ A fast, keyboard-driven desktop application for scoring a set of PDF files green
 | `?` | Toggle shortcuts panel |
 | `Escape` | Close overlay |
 
-After scoring a file the app advances automatically to the next unscored file. When all files are scored a summary overlay is shown.
+After scoring a file the app advances automatically to the next unscored file. Scoring the last unscored file shows a summary overlay; changing a score once every file is scored just advances to the next file. A folder that is already fully scored opens at its first file.
 
 ---
 
