@@ -14,6 +14,8 @@
   };
   const view = () => structuredClone(state);
   let inflight = 0;
+  // Tests edit this directly to mimic edits to the state file, setting editedOutside = true
+  window.stubState = state;
   window.calls = [];
   const query = new URLSearchParams(location.search);
   for (const f of state.files.slice(0, +(query.get('preset') ?? 0))) f.score = 'green';
@@ -34,7 +36,12 @@
         if (cmd === 'get_pdf_url') return window.FAIL[cmd] ? 'pdfs/missing.pdf' : `pdfs/${a.filename}`;
         if (window.FAIL[cmd]) throw window.FAIL[cmd];
         if (cmd === 'set_score') { f.score = a.score; return view(); }
-        if (cmd === 'set_note') { f.note = a.note || null; return; }
+        if (cmd === 'set_note') { f.note = a.note || null; return view(); }
+        if (cmd === 'refresh_session') {
+          if (!state.editedOutside) return null;
+          state.editedOutside = false;
+          return view();
+        }
         throw new Error('stub: unknown command ' + cmd);
       } finally {
         inflight--;
@@ -47,6 +54,12 @@
     sleep,
     key: (key, opts = {}) => document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...opts })),
     row: i => document.querySelectorAll('.file-item')[i],
+    /** A real mouse click on the centre of `el`, holding the button for `hold` ms. */
+    click: (el, hold = 80) => new Promise(resolve => {
+      const r = el.getBoundingClientRect();
+      window.__mouseDone = resolve;
+      window.cdpMouse(JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2, hold }));
+    }),
     scores: () => window.calls.filter(c => c[0] === 'set_score').map(c => `${c[1].filename}:${c[1].score}`),
     /** Wait until no replies are pending and no PDF is loading, and it stays so for 150 ms. */
     async settle(timeout = 5000) {

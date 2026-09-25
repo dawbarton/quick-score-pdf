@@ -75,6 +75,7 @@ ws.onmessage = m => {
   if (d.method === 'Runtime.exceptionThrown')
     consoleErrors.push(d.params.exceptionDetails.exception?.description ?? d.params.exceptionDetails.text);
   if (d.method === 'Page.loadEventFired') onLoad?.();
+  if (d.method === 'Runtime.bindingCalled' && d.params.name === 'cdpMouse') realClick(JSON.parse(d.params.payload));
 };
 const send = (method, params = {}) => new Promise(r => {
   const id = ++nextId;
@@ -83,6 +84,16 @@ const send = (method, params = {}) => new Promise(r => {
 });
 await send('Runtime.enable');
 await send('Page.enable');
+// Real (trusted) mouse input for the page: see t.click in stub.js
+await send('Runtime.addBinding', { name: 'cdpMouse' });
+async function realClick({ x, y, hold }) {
+  const base = { x, y, button: 'left', clickCount: 1 };
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base });
+  await sleep(hold);
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base });
+  await send('Runtime.evaluate', { expression: 'window.__mouseDone?.()' });
+}
 
 async function evaluate(expression) {
   const res = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });

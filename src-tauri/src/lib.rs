@@ -30,6 +30,7 @@ const FORMAT_DESCRIPTION: &[&str] = &[
     "notes: an optional free-text note per PDF, keyed by the same filenames. Leave a file out for no note.",
     "Entries for filenames that are not in the folder (or not in a command-line file list) are kept but not shown.",
     "_format, folder, and filter are informational: they are rewritten on every save and ignored when reading.",
+    "The file may be edited while QuickScorePDF is open: it reloads the file when its window is next activated, and before every save.",
 ];
 
 fn serialize_format<S: serde::Serializer>(_: &(), serializer: S) -> Result<S::Ok, S::Error> {
@@ -65,6 +66,10 @@ pub struct Session {
     /// state file that was moved aside. Reported once, when the session is opened.
     #[serde(skip)]
     load_warning: Option<String>,
+    /// The state file's text as this session last read or wrote it, to detect edits made
+    /// outside the app (by hand, or by an agent) while it is open.
+    #[serde(skip)]
+    last_written: Option<String>,
 }
 
 /// Contents of a state file, as read back by `Session::load_saved`.
@@ -73,6 +78,8 @@ struct Saved {
     scores: BTreeMap<String, Option<Score>>,
     notes: BTreeMap<String, String>,
     warning: Option<String>,
+    /// The file's text, when it was read and parsed
+    text: Option<String>,
 }
 
 impl Session {
@@ -90,7 +97,7 @@ impl Session {
             Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
         };
         match serde_json::from_str::<Session>(&data) {
-            Ok(s) => Ok(Saved { scores: s.scores, notes: s.notes, warning: None }),
+            Ok(s) => Ok(Saved { scores: s.scores, notes: s.notes, warning: None, text: Some(data) }),
             Err(e) => {
                 let secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -129,33 +136,59 @@ impl Session {
         pdf_files.dedup();
 
         // Carry over any existing scores and notes from the state file
-        let Saved { scores: mut saved_scores, notes: mut saved_notes, warning } = Self::load_saved(&path)?;
-
-        let scores = pdf_files
-            .iter()
-            .map(|name| (name.clone(), saved_scores.remove(name).flatten()))
-            .collect();
-
-        let notes = pdf_files
-            .iter()
-            .filter_map(|name| saved_notes.remove(name).map(|n| (name.clone(), n)))
-            .collect();
-
-        saved_scores.retain(|_, score| score.is_some());
-
-        Ok(Session {
+        let saved = Self::load_saved(&path)?;
+        let mut session = Session {
             format: (),
             folder: folder_str,
             filter,
-            scores,
-            notes,
-            retained_scores: saved_scores,
-            retained_notes: saved_notes,
-            load_warning: warning,
-        })
+            scores: pdf_files.into_iter().map(|name| (name, None)).collect(),
+            notes: BTreeMap::new(),
+            retained_scores: BTreeMap::new(),
+            retained_notes: BTreeMap::new(),
+            load_warning: saved.warning,
+            last_written: saved.text,
+        };
+        session.apply_saved(saved.scores, saved.notes);
+        Ok(session)
     }
 
-    fn save(&self) -> Result<(), String> {
+    /// Take scores and notes from a state file's contents: those for this session's files
+    /// are shown, the rest retained.
+    fn apply_saved(&mut self, mut scores: BTreeMap<String, Option<Score>>, mut notes: BTreeMap<String, String>) {
+        let names: Vec<String> = self.scores.keys().cloned().collect();
+        self.scores = names.iter().map(|n| (n.clone(), scores.remove(n).flatten())).collect();
+        self.notes = names.iter().filter_map(|n| notes.remove(n).map(|v| (n.clone(), v))).collect();
+        scores.retain(|_, score| score.is_some());
+        self.retained_scores = scores;
+        self.retained_notes = notes;
+    }
+
+    /// If the state file has changed since this session last read or wrote it, reload its
+    /// scores and notes. The app saves every change as it is made, so the file already holds
+    /// everything the session knows and reloading loses nothing. Returns whether anything
+    /// was reloaded. A changed file that cannot be parsed is an error, and is left alone.
+    fn reload_if_changed(&mut self) -> Result<bool, String> {
+        let path = Self::state_path(Path::new(&self.folder));
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            // Deleted: the next save recreates it from the session
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+        };
+        if self.last_written.as_deref() == Some(text.as_str()) {
+            return Ok(false);
+        }
+        let on_disk: Session = serde_json::from_str(&text).map_err(|e| format!(
+            "{} was changed outside QuickScorePDF and cannot be parsed ({e}). \
+             Nothing will be saved until it is fixed; return to this window afterwards.",
+            path.display()
+        ))?;
+        self.apply_saved(on_disk.scores, on_disk.notes);
+        self.last_written = Some(text);
+        Ok(true)
+    }
+
+    fn save(&mut self) -> Result<(), String> {
         let path = Self::state_path(Path::new(&self.folder));
         let mut on_disk = self.clone();
         on_disk.scores.extend(self.retained_scores.clone());
@@ -163,8 +196,10 @@ impl Session {
         let data = serde_json::to_string_pretty(&on_disk).map_err(|e| e.to_string())?;
         // Write then rename, so a crash or sync conflict mid-write cannot leave a truncated file
         let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, data).map_err(|e| e.to_string())?;
-        fs::rename(&tmp, &path).map_err(|e| e.to_string())
+        fs::write(&tmp, &data).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        self.last_written = Some(data);
+        Ok(())
     }
 }
 
@@ -300,6 +335,8 @@ async fn set_score(app: tauri::AppHandle, filename: String, score: Option<Score>
     let state = app.state::<std::sync::Mutex<Option<Session>>>();
     let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
     let session = guard.as_mut().ok_or("no session")?;
+    // Pick up any outside edits first, so that saving does not overwrite them
+    session.reload_if_changed()?;
     if session.scores.contains_key(&filename) {
         session.scores.insert(filename, score);
         session.save()?;
@@ -310,19 +347,30 @@ async fn set_score(app: tauri::AppHandle, filename: String, score: Option<Score>
 }
 
 #[tauri::command]
-async fn set_note(app: tauri::AppHandle, filename: String, note: String) -> Result<(), String> {
+async fn set_note(app: tauri::AppHandle, filename: String, note: String) -> Result<SessionView, String> {
     let state = app.state::<std::sync::Mutex<Option<Session>>>();
     let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
     let session = guard.as_mut().ok_or("no session")?;
     if !session.scores.contains_key(&filename) {
         return Err(format!("unknown file: {filename}"));
     }
+    session.reload_if_changed()?;
     if note.is_empty() {
         session.notes.remove(&filename);
     } else {
         session.notes.insert(filename, note);
     }
-    session.save()
+    session.save()?;
+    Ok(SessionView::from(&*session))
+}
+
+/// Reload the session if its state file was edited outside the app; `None` if unchanged.
+#[tauri::command]
+async fn refresh_session(app: tauri::AppHandle) -> Result<Option<SessionView>, String> {
+    let state = app.state::<std::sync::Mutex<Option<Session>>>();
+    let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(session) = guard.as_mut() else { return Ok(None); };
+    Ok(session.reload_if_changed()?.then(|| SessionView::from(&*session)))
 }
 
 #[tauri::command]
@@ -388,6 +436,7 @@ pub fn run() {
             get_cli_session,
             set_score,
             set_note,
+            refresh_session,
             get_pdf_url,
             export_csv,
         ])
@@ -467,12 +516,43 @@ mod tests {
     }
 
     #[test]
+    fn outside_edits_are_reloaded_not_overwritten() {
+        let dir = temp_dir("reload");
+        touch(&dir, &["a.pdf", "b.pdf"]);
+        let mut session = Session::load_or_create(&dir, None).unwrap();
+        session.save().unwrap();
+        assert!(!session.reload_if_changed().unwrap());
+
+        // An agent scores b.pdf while the app is open …
+        let mut edited = read_state(&dir);
+        edited.scores.insert("b.pdf".into(), Some(Score::Red));
+        edited.notes.insert("b.pdf".into(), "from the agent".into());
+        fs::write(Session::state_path(&dir), serde_json::to_string(&edited).unwrap()).unwrap();
+
+        // … then the app scores a.pdf, as set_score does: both survive
+        assert!(session.reload_if_changed().unwrap());
+        session.scores.insert("a.pdf".into(), Some(Score::Green));
+        session.save().unwrap();
+        let on_disk = read_state(&dir);
+        assert_eq!(on_disk.scores["a.pdf"], Some(Score::Green));
+        assert_eq!(on_disk.scores["b.pdf"], Some(Score::Red));
+        assert_eq!(on_disk.notes["b.pdf"], "from the agent");
+        assert!(!session.reload_if_changed().unwrap());
+
+        // A broken outside edit is reported and left for the user to fix
+        fs::write(Session::state_path(&dir), "{ half-written").unwrap();
+        assert!(session.reload_if_changed().unwrap_err().contains("cannot be parsed"));
+        assert_eq!(fs::read_to_string(Session::state_path(&dir)).unwrap(), "{ half-written");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn unparseable_state_file_is_moved_aside_not_overwritten() {
         let dir = temp_dir("corrupt");
         touch(&dir, &["a.pdf"]);
         fs::write(Session::state_path(&dir), "{ truncated").unwrap();
 
-        let session = Session::load_or_create(&dir, None).unwrap();
+        let mut session = Session::load_or_create(&dir, None).unwrap();
         assert!(session.load_warning.as_deref().unwrap_or("").contains("unreadable-"));
         session.save().unwrap();
 

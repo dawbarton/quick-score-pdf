@@ -84,13 +84,14 @@ A JSON file written to the PDF folder whenever a score or note changes, and crea
 - `notes` maps filenames to free-text notes; files without a note are left out.
 - `_format` describes this structure in the file itself, since JSON has no comments. It, `folder`, and `filter` (the file list in file-list mode) are informational: they are rewritten on every save and ignored when reading.
 - Scores and notes for files that are not in the session (not in a command-line file list, or no longer in the folder) are kept in the file but not shown.
+- The file can be edited while the app is open. The app reloads it whenever its window is activated and before every save, so outside edits are picked up rather than overwritten; nothing is lost, because the app saves each change as it is made. If an outside edit leaves the file unparseable, the app says so and saves nothing until it is fixed.
 - Saves write a temporary file and rename it, so the file is never left half-written. A file that cannot be parsed is moved aside to `quick-score-pdf.json.unreadable-<timestamp>` and the app says so; the folder then starts unscored.
 
 ### Pre-populating scores
 
 1. Open the folder in QuickScorePDF once. This creates `quick-score-pdf.json` with every PDF listed as `null`.
 2. Give that file to a person or an agent to fill in `scores` and `notes`; the `_format` key explains what is allowed. The result must stay valid JSON.
-3. Reopen the folder in QuickScorePDF to review the scores.
+3. Switch back to QuickScorePDF (or reopen the folder) to review the scores.
 
 ---
 
@@ -132,6 +133,7 @@ Registered Tauri commands:
 | `get_session` | Return the current session view |
 | `set_score` | Update a file's score and persist |
 | `set_note` | Update a file's note and persist |
+| `refresh_session` | Reload the state file if it was edited outside the app |
 | `get_pdf_url` | Resolve a filename to an absolute path for the asset protocol |
 | `export_csv` | Open a native save dialog and write `filename,score,note` CSV |
 

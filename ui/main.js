@@ -242,23 +242,40 @@ function renderSession(s) {
   progressBar.style.width = pct + '%';
   progressText.textContent = `${scored} / ${total}`;
 
-  fileListEl.innerHTML = '';
-  s.files.forEach((file, i) => {
-    const li = document.createElement('li');
+  // Rows are updated in place and only moved when the order changes: replacing the row
+  // under the pointer between mousedown and mouseup (e.g. when a note saved on blur
+  // returns) would swallow the click
+  const rows = s.files.map((file, i) => {
+    const li = rowFor(file.name);
     li.className = 'file-item' + (file.score ? ` score-${file.score}` : '') + (i === currentIndex ? ' active' : '');
     li.dataset.index = i;
+    return li;
+  });
+  const children = fileListEl.children;
+  if (children.length !== rows.length || rows.some((li, i) => children[i] !== li)) {
+    fileListEl.replaceChildren(...rows);
+  }
+
+  if (currentIndex !== null) updateScoreButtons(s.files[currentIndex]?.score ?? null);
+}
+
+const rowsByName = new Map();  // filename → its <li> in the file list
+
+function rowFor(name) {
+  let li = rowsByName.get(name);
+  if (!li) {
     const dot = document.createElement('span');
     dot.className = 'dot';
     const fname = document.createElement('span');
     fname.className = 'fname';
-    fname.title = file.name;
-    fname.textContent = file.name;
+    fname.title = name;
+    fname.textContent = name;
+    li = document.createElement('li');
     li.append(dot, fname);
-    li.addEventListener('click', () => onFileClick(i));
-    fileListEl.appendChild(li);
-  });
-
-  if (currentIndex !== null) updateScoreButtons(s.files[currentIndex]?.score ?? null);
+    li.addEventListener('click', () => onFileClick(session.files.findIndex(f => f.name === name)));
+    rowsByName.set(name, li);
+  }
+  return li;
 }
 
 function updateScoreButtons(score) {
@@ -290,8 +307,8 @@ async function openFile(index) {
   updateScoreButtons(file.score ?? null);
   noteInput.value = file.note ?? '';
 
-  document.querySelectorAll('.file-item').forEach((li, i) =>
-    li.classList.toggle('active', i === index));
+  document.querySelectorAll('.file-item').forEach(li =>
+    li.classList.toggle('active', +li.dataset.index === index));
   fileListEl.querySelector('.file-item.active')?.scrollIntoView({ block: 'nearest' });
 
   // Restore per-file view state, or use explicit defaults for files never seen before
@@ -367,17 +384,33 @@ noteInput.addEventListener('blur', async () => {
   const note = noteInput.value;
   if (note === (oldNote ?? '')) return;
   try {
-    await invoke('set_note', { filename: name, note });
-    const file = session.files.find(f => f.name === name);
-    if (file) file.note = note || null;
+    renderSession(await invoke('set_note', { filename: name, note }));
   } catch (e) {
     showError(`Could not save the note for ${name}`, e);
   }
 });
 
+// ── Outside edits ──────────────────────────────────────────────────────────────
+// Pick up edits made to the state file outside the app (by hand, or by an agent) whenever
+// the window is brought back; saves check for them too.
+async function refreshFromDisk() {
+  if (!session) return;
+  try {
+    const s = await invoke('refresh_session');
+    if (!s) return;
+    renderSession(s);
+    const file = currentIndex === null ? null : session.files[currentIndex];
+    if (file && document.activeElement !== noteInput) noteInput.value = file.note ?? '';
+  } catch (e) {
+    showError('Could not reload the saved scores', e);
+  }
+}
+window.addEventListener('focus', refreshFromDisk);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshFromDisk(); });
+
 // ── File click ─────────────────────────────────────────────────────────────────
 async function onFileClick(i) {
-  await openFile(i);
+  if (i !== -1) await openFile(i);
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────────
@@ -398,6 +431,7 @@ async function startSession(s) {
   fileViewState.clear();
   hideError();
   if (s.warning) showError(s.warning);
+  rowsByName.clear();
   renderSession(s);
   welcomeEl.classList.add('hidden');
   appEl.classList.remove('hidden');
