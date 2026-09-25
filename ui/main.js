@@ -31,34 +31,54 @@ const ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 const DEFAULT_SCALE = 1.5;
 
 let currentScale = DEFAULT_SCALE;
+// Invariant: non-null only once the document for currentIndex is loaded and on screen.
 let currentPdfDoc = null;
-let renderingPdf = false;
-let pendingPath = null;
+// Bumped by every file open and zoom. Async work captures it at the start and abandons
+// itself if it has changed, so a slow, superseded request can never overwrite the view.
+let viewGen = 0;
+// True while the PDF for currentIndex is being fetched and rendered; scoring is refused
+// meanwhile, so a score can never be given to a file that is not yet on screen.
+let pdfLoadInProgress = false;
 
 function updateZoomLabel() {
   document.getElementById('zoom-level').textContent = Math.round(currentScale * 100) + '%';
 }
 
-async function renderPages(resetScroll = true) {
-  if (!currentPdfDoc) return;
-
-  const scrollRatio = resetScroll ? 0
-    : pdfContainer.scrollTop / (pdfContainer.scrollHeight || 1);
-
-  pdfContainer.innerHTML = '';
-  for (let i = 1; i <= currentPdfDoc.numPages; i++) {
-    const page = await currentPdfDoc.getPage(i);
-    const viewport = page.getViewport({ scale: currentScale });
+/**
+ * Render every page of `doc` off-screen, then swap them in. Returns false, leaving the
+ * view untouched, if a newer open or zoom has started in the meantime.
+ */
+async function renderPages(doc, scale, gen, keepScrollRatio) {
+  const frag = document.createDocumentFragment();
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    if (gen !== viewGen) return false;
+    const viewport = page.getViewport({ scale });
     const canvas = document.createElement('canvas');
     canvas.className = 'pdf-page';
     canvas.width = viewport.width;
     canvas.height = viewport.height;
-    pdfContainer.appendChild(canvas);
+    frag.appendChild(canvas);
     await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    if (gen !== viewGen) return false;
   }
 
-  pdfContainer.scrollTop = resetScroll ? 0 : scrollRatio * pdfContainer.scrollHeight;
+  const scrollRatio = pdfContainer.scrollTop / (pdfContainer.scrollHeight || 1);
+  pdfContainer.replaceChildren(frag);
+  if (keepScrollRatio) pdfContainer.scrollTop = scrollRatio * pdfContainer.scrollHeight;
+  return true;
+}
+
+async function rerenderAtScale(scale) {
+  const doc = currentPdfDoc;
+  const gen = ++viewGen;
+  currentScale = scale;
   updateZoomLabel();
+  try {
+    await renderPages(doc, scale, gen, true);
+  } catch (err) {
+    if (gen === viewGen) console.error('PDF render error:', err);
+  }
 }
 
 async function zoomBy(delta) {
@@ -68,45 +88,43 @@ async function zoomBy(delta) {
     ? ZOOM_STEPS[Math.min(idx + 1, ZOOM_STEPS.length - 1)]
     : ZOOM_STEPS[Math.max(idx - 1, 0)];
   if (next === currentScale) return;
-  currentScale = next;
-  await renderPages(false);
+  await rerenderAtScale(next);
 }
 
 async function zoomReset() {
   if (!currentPdfDoc) return;
-  currentScale = DEFAULT_SCALE;
-  await renderPages(false);
+  await rerenderAtScale(DEFAULT_SCALE);
 }
 
-async function renderPdf(filePath) {
-  if (renderingPdf) { pendingPath = filePath; return; }
-  renderingPdf = true;
-
-  pdfContainer.classList.add('hidden');
-  noFileEl.style.display = 'none';
-  pdfLoading.classList.remove('hidden');
-  currentPdfDoc = null;
-
+/** Load and display `filename` at `scale`, then scroll to `scrollTop`. */
+async function loadPdf(filename, scale, scrollTop, gen) {
+  let doc = null;
   try {
-    const url = convertFileSrc(filePath);
-    const response = await fetch(url);
+    const filePath = await invoke('get_pdf_url', { filename });
+    if (gen !== viewGen) return;
+    const response = await fetch(convertFileSrc(filePath));
+    if (!response.ok) throw new Error(`HTTP ${response.status} fetching ${filename}`);
     const data = await response.arrayBuffer();
-    currentPdfDoc = await pdfjsLib.getDocument({ data }).promise;
-    await renderPages(true);
+    if (gen !== viewGen) return;
+    doc = await pdfjsLib.getDocument({ data }).promise;
+    if (!(await renderPages(doc, scale, gen, false))) return;
+
+    currentPdfDoc = doc;
+    doc = null;  // now owned by currentPdfDoc; do not destroy below
+    pdfLoadInProgress = false;
     pdfLoading.classList.add('hidden');
     pdfContainer.classList.remove('hidden');
+    // Only possible once the container is displayed
+    pdfContainer.scrollTop = scrollTop;
   } catch (err) {
+    if (gen !== viewGen) return;
     console.error('PDF render error:', err);
+    pdfLoadInProgress = false;
     pdfLoading.classList.add('hidden');
     noFileEl.style.display = 'flex';
     noFileEl.textContent = 'Failed to load PDF';
-  }
-
-  renderingPdf = false;
-  if (pendingPath) {
-    const next = pendingPath;
-    pendingPath = null;
-    await renderPdf(next);
+  } finally {
+    doc?.destroy();
   }
 }
 
@@ -148,13 +166,22 @@ function updateScoreButtons(score) {
 }
 
 function saveCurrentViewState() {
-  if (currentIndex === null || !session) return;
+  // While a file is still loading, the view does not show it, so there is nothing to save
+  if (currentIndex === null || !session || !currentPdfDoc) return;
   const name = session.files[currentIndex].name;
   fileViewState.set(name, { scale: currentScale, scrollTop: pdfContainer.scrollTop });
 }
 
 async function openFile(index) {
   saveCurrentViewState();
+
+  const gen = ++viewGen;
+  currentPdfDoc?.destroy();
+  currentPdfDoc = null;
+  pdfLoadInProgress = true;
+  pdfContainer.classList.add('hidden');
+  noFileEl.style.display = 'none';
+  pdfLoading.classList.remove('hidden');
 
   currentIndex = index;
   const file = session.files[index];
@@ -171,11 +198,8 @@ async function openFile(index) {
   currentScale = saved ? saved.scale : DEFAULT_SCALE;
   updateZoomLabel();
 
-  const filePath = await invoke('get_pdf_url', { filename: file.name });
-  await renderPdf(filePath);
-
   // Always set scroll explicitly — never inherit the previous file's position
-  pdfContainer.scrollTop = saved ? saved.scrollTop : 0;
+  await loadPdf(file.name, currentScale, saved ? saved.scrollTop : 0, gen);
 }
 
 // ── Scoring ────────────────────────────────────────────────────────────────────
@@ -239,6 +263,12 @@ async function doExport() {
 
 // ── Session startup ────────────────────────────────────────────────────────────
 async function startSession(s) {
+  // Abandon any load or zoom still running from the previous session
+  ++viewGen;
+  currentPdfDoc?.destroy();
+  currentPdfDoc = null;
+  pdfLoadInProgress = false;
+  pdfLoading.classList.add('hidden');
   currentIndex = null;
   currentScale = DEFAULT_SCALE;
   fileViewState.clear();
