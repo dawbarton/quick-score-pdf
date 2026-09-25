@@ -34,11 +34,42 @@ pub struct Session {
     /// filename -> note text (absent = no note)
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub notes: BTreeMap<String, String>,
+    /// Scores and notes from the state file for files outside this session (not listed on
+    /// the command line, or no longer in the folder). Not shown, but written back on save so
+    /// that they are never lost.
+    #[serde(skip)]
+    retained_scores: BTreeMap<String, Option<Score>>,
+    #[serde(skip)]
+    retained_notes: BTreeMap<String, String>,
 }
 
 impl Session {
     fn state_path(folder: &Path) -> PathBuf {
         folder.join("quick-score-pdf.json")
+    }
+
+    /// Read the saved scores and notes. A missing file gives empty maps. An unparseable file
+    /// is moved aside rather than silently replaced by the next save; an unreadable one
+    /// (e.g. a cloud file that cannot be fetched) is an error, so nothing overwrites it.
+    fn load_saved(path: &Path) -> Result<(BTreeMap<String, Option<Score>>, BTreeMap<String, String>), String> {
+        let data = match fs::read_to_string(path) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+            Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+        };
+        match serde_json::from_str::<Session>(&data) {
+            Ok(s) => Ok((s.scores, s.notes)),
+            Err(e) => {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let backup = path.with_extension(format!("json.unreadable-{secs}"));
+                fs::rename(path, &backup).map_err(|e| e.to_string())?;
+                eprintln!("{} could not be parsed ({e}); moved to {}", path.display(), backup.display());
+                Ok(Default::default())
+            }
+        }
     }
 
     /// `filter` is `Some(filenames)` for CLI file-list mode, `None` for full-folder mode.
@@ -59,18 +90,10 @@ impl Session {
                 .collect(),
         };
         pdf_files.sort();
+        pdf_files.dedup();
 
         // Carry over any existing scores and notes from the state file
-        let (mut saved_scores, saved_notes): (BTreeMap<String, Option<Score>>, BTreeMap<String, String>) =
-            if path.exists() {
-                fs::read_to_string(&path)
-                    .ok()
-                    .and_then(|data| serde_json::from_str::<Session>(&data).ok())
-                    .map(|s| (s.scores, s.notes))
-                    .unwrap_or_default()
-            } else {
-                Default::default()
-            };
+        let (mut saved_scores, mut saved_notes) = Self::load_saved(&path)?;
 
         let scores = pdf_files
             .iter()
@@ -79,16 +102,31 @@ impl Session {
 
         let notes = pdf_files
             .iter()
-            .filter_map(|name| saved_notes.get(name).cloned().map(|n| (name.clone(), n)))
+            .filter_map(|name| saved_notes.remove(name).map(|n| (name.clone(), n)))
             .collect();
 
-        Ok(Session { folder: folder_str, filter, scores, notes })
+        saved_scores.retain(|_, score| score.is_some());
+
+        Ok(Session {
+            folder: folder_str,
+            filter,
+            scores,
+            notes,
+            retained_scores: saved_scores,
+            retained_notes: saved_notes,
+        })
     }
 
     fn save(&self) -> Result<(), String> {
         let path = Self::state_path(Path::new(&self.folder));
-        let data = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(path, data).map_err(|e| e.to_string())
+        let mut on_disk = self.clone();
+        on_disk.scores.extend(self.retained_scores.clone());
+        on_disk.notes.extend(self.retained_notes.clone());
+        let data = serde_json::to_string_pretty(&on_disk).map_err(|e| e.to_string())?;
+        // Write then rename, so a crash or sync conflict mid-write cannot leave a truncated file
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, data).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, &path).map_err(|e| e.to_string())
     }
 }
 
@@ -129,9 +167,9 @@ enum CliInput {
     Files { dir: PathBuf, names: Vec<String> },
 }
 
-fn parse_cli_input() -> Option<CliInput> {
-    let args: Vec<String> = std::env::args()
-        .skip(1)
+/// `args` excludes the program name.
+fn parse_cli_input(args: impl IntoIterator<Item = String>) -> Option<CliInput> {
+    let args: Vec<String> = args.into_iter()
         .filter(|a| !a.starts_with('-'))
         .collect();
 
@@ -140,21 +178,34 @@ fn parse_cli_input() -> Option<CliInput> {
     // Single directory argument
     let first = PathBuf::from(&args[0]);
     if first.is_dir() {
-        return Some(CliInput::Dir(first));
+        return Some(CliInput::Dir(first.canonicalize().unwrap_or(first)));
     }
 
-    // One or more PDF file arguments
+    // One or more PDF file arguments, resolved to canonical paths
     let pdfs: Vec<PathBuf> = args.iter()
-        .map(PathBuf::from)
-        .filter(|p| {
-            p.extension().map(|e| e.eq_ignore_ascii_case("pdf")).unwrap_or(false) && p.exists()
+        .filter_map(|a| {
+            let p = PathBuf::from(a);
+            let is_pdf = p.extension().map(|e| e.eq_ignore_ascii_case("pdf")).unwrap_or(false);
+            match p.canonicalize() {
+                Ok(c) if is_pdf && c.is_file() => Some(c),
+                _ => { eprintln!("ignoring {a}: not an existing PDF file"); None }
+            }
         })
         .collect();
 
     if pdfs.is_empty() { return None; }
 
-    // Resolve all paths to their canonical form and use the parent of the first
+    // The session is keyed by filename within one folder, so every file must share it:
+    // otherwise b/y.pdf would be looked up as a/y.pdf
     let dir = pdfs[0].parent()?.to_path_buf();
+    if let Some(other) = pdfs.iter().find(|p| p.parent() != Some(dir.as_path())) {
+        eprintln!(
+            "all PDF files must be in the same folder ({} is not in {})",
+            other.display(),
+            dir.display()
+        );
+        return None;
+    }
     let names = pdfs.iter()
         .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .collect();
@@ -164,7 +215,7 @@ fn parse_cli_input() -> Option<CliInput> {
 
 #[tauri::command]
 async fn get_cli_session(app: tauri::AppHandle) -> Result<Option<SessionView>, String> {
-    let Some(input) = parse_cli_input() else { return Ok(None); };
+    let Some(input) = parse_cli_input(std::env::args().skip(1)) else { return Ok(None); };
 
     let (dir, filter) = match input {
         CliInput::Dir(dir)            => (dir, None),
@@ -302,4 +353,87 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh, empty directory under the system temp dir.
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("qsp-test-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn touch(dir: &Path, names: &[&str]) {
+        for n in names { fs::write(dir.join(n), b"%PDF-1.4\n").unwrap(); }
+    }
+
+    fn read_state(dir: &Path) -> Session {
+        serde_json::from_str(&fs::read_to_string(Session::state_path(dir)).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn file_list_session_keeps_scores_of_unlisted_files() {
+        let dir = temp_dir("retain");
+        touch(&dir, &["a.pdf", "b.pdf"]);
+        let mut full = Session::load_or_create(&dir, None).unwrap();
+        full.scores.insert("a.pdf".into(), Some(Score::Green));
+        full.scores.insert("b.pdf".into(), Some(Score::Red));
+        full.notes.insert("b.pdf".into(), "keep me".into());
+        full.save().unwrap();
+
+        let mut partial = Session::load_or_create(&dir, Some(vec!["a.pdf".into()])).unwrap();
+        assert_eq!(partial.scores.keys().collect::<Vec<_>>(), ["a.pdf"]);
+        partial.scores.insert("a.pdf".into(), Some(Score::Amber));
+        partial.save().unwrap();
+
+        let on_disk = read_state(&dir);
+        assert_eq!(on_disk.scores["a.pdf"], Some(Score::Amber));
+        assert_eq!(on_disk.scores["b.pdf"], Some(Score::Red));
+        assert_eq!(on_disk.notes["b.pdf"], "keep me");
+        assert!(!Session::state_path(&dir).with_extension("json.tmp").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unparseable_state_file_is_moved_aside_not_overwritten() {
+        let dir = temp_dir("corrupt");
+        touch(&dir, &["a.pdf"]);
+        fs::write(Session::state_path(&dir), "{ truncated").unwrap();
+
+        let session = Session::load_or_create(&dir, None).unwrap();
+        session.save().unwrap();
+
+        let backups: Vec<_> = fs::read_dir(&dir).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with("quick-score-pdf.json.unreadable-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read_to_string(dir.join(&backups[0])).unwrap(), "{ truncated");
+        assert_eq!(read_state(&dir).scores["a.pdf"], None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cli_files_must_share_a_folder() {
+        let dir = temp_dir("cli");
+        fs::create_dir_all(dir.join("x")).unwrap();
+        fs::create_dir_all(dir.join("y")).unwrap();
+        touch(&dir.join("x"), &["a.pdf", "b.pdf"]);
+        touch(&dir.join("y"), &["b.pdf"]);
+        let arg = |p: &str| dir.join(p).to_string_lossy().to_string();
+
+        match parse_cli_input([arg("x/a.pdf"), arg("x/b.pdf"), arg("x/missing.pdf")]) {
+            Some(CliInput::Files { dir: d, names }) => {
+                assert_eq!(d, dir.join("x").canonicalize().unwrap());
+                assert_eq!(names, ["a.pdf", "b.pdf"]);
+            }
+            _ => panic!("expected a file list"),
+        }
+        assert!(parse_cli_input([arg("x/a.pdf"), arg("y/b.pdf")]).is_none());
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }
