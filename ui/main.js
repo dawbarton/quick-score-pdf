@@ -240,11 +240,15 @@ noteInput.addEventListener('focus', () => {
 
 noteInput.addEventListener('blur', async () => {
   if (currentIndex === null) return;
-  const file = session.files[currentIndex];
+  // Capture the name now: blur fires on mousedown, and the click that follows may change
+  // currentIndex (and even replace session) before the save completes
+  const { name, note: oldNote } = session.files[currentIndex];
   const note = noteInput.value;
+  if (note === (oldNote ?? '')) return;
   try {
-    await invoke('set_note', { filename: file.name, note });
-    session.files[currentIndex] = { ...file, note: note || null };
+    await invoke('set_note', { filename: name, note });
+    const file = session.files.find(f => f.name === name);
+    if (file) file.note = note || null;
   } catch (e) {
     console.error('Failed to save note:', e);
   }
