@@ -10,7 +10,7 @@ A fast, keyboard-driven desktop application for scoring a set of PDF files green
 - **Three-tier scoring** — green / amber / red, assignable by keyboard or button
 - **Freetext notes** — attach a short note to any PDF; saved with scores and exported to CSV
 - **Persistent state** — scores and notes are written to `quick-score-pdf.json` in the PDF folder; reopening the same folder resumes where you left off
-- **Progress tracking** — sidebar progress bar shows how many files have been scored
+- **Progress tracking** — sidebar progress bar shows how many files have been scored, and each score button shows how many files have that colour
 - **CSV export** — one row per file: `filename`, `score`, `note`
 - **Keyboard-first** — every action reachable without a mouse (see [Keyboard shortcuts](#keyboard-shortcuts))
 - **CLI support** — launch with a directory or a list of PDF files as arguments

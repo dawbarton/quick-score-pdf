@@ -241,6 +241,9 @@ function renderSession(s) {
   const pct    = total ? Math.round((scored / total) * 100) : 0;
   progressBar.style.width = pct + '%';
   progressText.textContent = `${scored} / ${total}`;
+  document.querySelectorAll('.score-count').forEach(el => {
+    el.textContent = `(${s.files.filter(f => f.score === el.dataset.count).length})`;
+  });
 
   // Rows are updated in place and only moved when the order changes: replacing the row
   // under the pointer between mousedown and mouseup (e.g. when a note saved on blur

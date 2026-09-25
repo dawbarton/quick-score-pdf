@@ -79,6 +79,7 @@ html, body { height: 100%; font-family: system-ui, sans-serif; background: var(-
 .score-label { font-size: 0.82rem; color: var(--muted); }
 .score-btn { cursor: pointer; display: flex; align-items: center; gap: 6px; border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; font-weight: 600; border: 2px solid transparent; background: var(--bg); color: var(--text); transition: all 0.15s; }
 .score-btn .score-dot { width: 10px; height: 10px; border-radius: 50%; }
+.score-btn .score-count { font-weight: 400; font-variant-numeric: tabular-nums; color: var(--muted); }
 .score-btn.green .score-dot { background: var(--green); }
 .score-btn.amber .score-dot { background: var(--amber); }
 .score-btn.red   .score-dot { background: var(--red); }
