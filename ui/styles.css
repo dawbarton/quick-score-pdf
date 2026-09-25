@@ -36,7 +36,7 @@ html, body { height: 100%; font-family: system-ui, sans-serif; background: var(-
 .sidebar { width: var(--sidebar-w); min-width: var(--sidebar-w); border-right: 1px solid var(--border); display: flex; flex-direction: column; background: var(--surface); overflow: hidden; }
 .sidebar-header { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 .folder-name { font-size: 0.78rem; color: var(--muted); word-break: break-all; }
-.sidebar-actions { display: flex; gap: 6px; }
+.sidebar-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .progress-bar-wrap { position: relative; height: 20px; background: var(--bg); flex-shrink: 0; }
 .progress-bar { height: 100%; background: #3b82f6; transition: width 0.3s; }

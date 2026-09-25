@@ -5,7 +5,8 @@
 // Failures: set window.FAIL = { command: 'message' } to make a command reject, as Tauri does,
 // with that string; get_pdf_url then returns a path that does not exist. At page load, use the
 // query string instead: ?fail=command&warn=text (warn adds a load warning to the session).
-// ?preset=N starts with the first N files scored green.
+// ?preset=N starts with the first N files scored green. localStorage is cleared before each
+// page load, then ?store=key:value sets an entry.
 (() => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const state = {
@@ -19,6 +20,8 @@
   window.calls = [];
   const query = new URLSearchParams(location.search);
   for (const f of state.files.slice(0, +(query.get('preset') ?? 0))) f.score = 'green';
+  localStorage.clear();
+  if (query.has('store')) localStorage.setItem(...query.get('store').split(':'));
   window.FAIL = query.has('fail') ? { [query.get('fail')]: 'stub failure' } : {};
 
   window.__TAURI__ = { core: {
@@ -54,6 +57,7 @@
     sleep,
     key: (key, opts = {}) => document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...opts })),
     row: i => document.querySelectorAll('.file-item')[i],
+    rowNames: () => [...document.querySelectorAll('.file-item .fname')].map(e => e.textContent.replace('.pdf', '')),
     /** A real mouse click on the centre of `el`, holding the button for `hold` ms. */
     click: (el, hold = 80) => new Promise(resolve => {
       const r = el.getBoundingClientRect();

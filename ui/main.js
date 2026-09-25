@@ -10,6 +10,15 @@ let session = null;       // { folder, files: [{name, score, note}] }
 let currentIndex = null;
 const fileViewState = new Map(); // filename → { scale, scrollTop }
 
+// File-list order. Indices into session.files in the order shown, which is also the order
+// that Prev/Next and "next unscored" follow. Sorting by colour puts unscored files first,
+// then green, amber, and red, each group by name; the choice is remembered on this machine.
+const SORT_KEY = 'quick-score-pdf.sort';
+const COLOUR_RANK = { green: 1, amber: 2, red: 3 };
+let sortByColour = false;
+try { sortByColour = localStorage.getItem(SORT_KEY) === 'colour'; } catch { /* no storage */ }
+let displayOrder = [];
+
 // ── DOM refs ───────────────────────────────────────────────────────────────────
 const welcomeEl       = document.getElementById('welcome');
 const appEl           = document.getElementById('app');
@@ -25,6 +34,7 @@ const doneOverlay     = document.getElementById('done-overlay');
 const doneSummary     = document.getElementById('done-summary');
 const shortcutsOverlay = document.getElementById('shortcuts-overlay');
 const noteInput       = document.getElementById('note-input');
+const sortBtn         = document.getElementById('sort-btn');
 const errorBanner     = document.getElementById('error-banner');
 const errorText       = document.getElementById('error-text');
 
@@ -248,7 +258,14 @@ function renderSession(s) {
   // Rows are updated in place and only moved when the order changes: replacing the row
   // under the pointer between mousedown and mouseup (e.g. when a note saved on blur
   // returns) would swallow the click
-  const rows = s.files.map((file, i) => {
+  // session.files is sorted by name; the sort is stable, so each colour group stays so
+  displayOrder = s.files.map((_, i) => i);
+  if (sortByColour) {
+    const rank = i => COLOUR_RANK[s.files[i].score] ?? 0;
+    displayOrder.sort((a, b) => rank(a) - rank(b));
+  }
+  const rows = displayOrder.map(i => {
+    const file = s.files[i];
     const li = rowFor(file.name);
     li.className = 'file-item' + (file.score ? ` score-${file.score}` : '') + (i === currentIndex ? ' active' : '');
     li.dataset.index = i;
@@ -257,7 +274,10 @@ function renderSession(s) {
   const children = fileListEl.children;
   if (children.length !== rows.length || rows.some((li, i) => children[i] !== li)) {
     fileListEl.replaceChildren(...rows);
+    fileListEl.querySelector('.file-item.active')?.scrollIntoView({ block: 'nearest' });
   }
+  sortBtn.textContent = sortByColour ? 'Sort: colour' : 'Sort: name';
+  sortBtn.setAttribute('aria-pressed', sortByColour);
 
   if (currentIndex !== null) updateScoreButtons(s.files[currentIndex]?.score ?? null);
 }
@@ -339,15 +359,18 @@ async function applyScore(score) {
       showError(`Could not save the score for ${file.name}`, e);
       return;
     }
+    // Move on relative to the order as it was when the score was given, since sorting by
+    // colour may now have moved this file to another group
+    const orderBefore = displayOrder;
     renderSession(updated);
     currentIndex = updated.files.findIndex(f => f.name === file.name);
 
     // Move on to the next unscored file. When none are left, celebrate only if this score
     // completed the set; changing a score afterwards just moves on to the next file.
-    let next = findNextUnscored(currentIndex);
+    let next = findNextUnscored(currentIndex, orderBefore);
     if (next === null) {
       if (!file.score) { showDone(updated); return; }
-      next = (currentIndex + 1) % updated.files.length;
+      next = stepFrom(currentIndex, 1, orderBefore);
     }
     scoreInFlight = false;  // openFile sets pdfLoadInProgress, which now blocks scoring
     await openFile(next);
@@ -356,11 +379,30 @@ async function applyScore(score) {
   }
 }
 
-function findNextUnscored(fromIndex) {
-  const files = session.files;
-  for (let i = fromIndex + 1; i < files.length; i++) if (!files[i].score) return i;
-  for (let i = 0; i < fromIndex; i++) if (!files[i].score) return i;
+/** The file `delta` places after `index` in `order` (default: as displayed), wrapping. */
+function stepFrom(index, delta, order = displayOrder) {
+  const pos = order.indexOf(index);
+  return order[(pos + delta + order.length) % order.length];
+}
+
+/** The first unscored file after `index` in `order`, wrapping; null if there is none. */
+function findNextUnscored(index, order = displayOrder) {
+  for (let d = 1; d < order.length; d++) {
+    const i = stepFrom(index, d, order);
+    if (!session.files[i].score) return i;
+  }
   return null;
+}
+
+async function openAdjacent(delta) {
+  if (currentIndex === null) return;
+  await openFile(stepFrom(currentIndex, delta));
+}
+
+function toggleSort() {
+  sortByColour = !sortByColour;
+  try { localStorage.setItem(SORT_KEY, sortByColour ? 'colour' : 'name'); } catch { /* no storage */ }
+  if (session) renderSession(session);
 }
 
 // ── Done overlay ───────────────────────────────────────────────────────────────
@@ -445,7 +487,7 @@ async function startSession(s) {
   noteInput.value = '';
 
   // Start at the first unscored file, or at the top if all are scored
-  if (s.files.length > 0) await openFile(Math.max(s.files.findIndex(f => !f.score), 0));
+  if (s.files.length > 0) await openFile(displayOrder.find(i => !s.files[i].score) ?? displayOrder[0]);
 }
 
 // ── Folder selection ───────────────────────────────────────────────────────────
@@ -513,14 +555,9 @@ document.addEventListener('keydown', async (e) => {
   else if (key === 'n') { e.preventDefault(); noteInput.focus(); }
 
   // File navigation — left/right
-  else if (key === 'arrowleft') {
-    e.preventDefault();
-    await openFile((currentIndex - 1 + session.files.length) % session.files.length);
-  }
-  else if (key === 'arrowright') {
-    e.preventDefault();
-    await openFile((currentIndex + 1) % session.files.length);
-  }
+  else if (key === 'arrowleft')  { e.preventDefault(); await openAdjacent(-1); }
+  else if (key === 'arrowright') { e.preventDefault(); await openAdjacent(+1); }
+  else if (key === 's')          { e.preventDefault(); toggleSort(); }
 
   // PDF scroll — up/down
   else if (key === 'arrowup')   { e.preventDefault(); pdfContainer.scrollBy({ top: -200, behavior: 'smooth' }); }
@@ -537,14 +574,9 @@ document.getElementById('open-folder-btn').addEventListener('click', openFolder)
 document.getElementById('change-folder-btn').addEventListener('click', openFolder);
 document.getElementById('export-btn').addEventListener('click', doExport);
 document.getElementById('done-export-btn').addEventListener('click', doExport);
-document.getElementById('prev-btn').addEventListener('click', async () => {
-  if (currentIndex === null) return;
-  await openFile((currentIndex - 1 + session.files.length) % session.files.length);
-});
-document.getElementById('next-btn').addEventListener('click', async () => {
-  if (currentIndex === null) return;
-  await openFile((currentIndex + 1) % session.files.length);
-});
+document.getElementById('prev-btn').addEventListener('click', () => openAdjacent(-1));
+document.getElementById('next-btn').addEventListener('click', () => openAdjacent(+1));
+sortBtn.addEventListener('click', toggleSort);
 document.getElementById('error-close-btn').addEventListener('click', hideError);
 document.getElementById('done-review-btn').addEventListener('click', () => doneOverlay.classList.add('hidden'));
 document.getElementById('zoom-in-btn').addEventListener('click',    () => zoomBy(+1));

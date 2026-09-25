@@ -11,6 +11,7 @@ A fast, keyboard-driven desktop application for scoring a set of PDF files green
 - **Freetext notes** — attach a short note to any PDF; saved with scores and exported to CSV
 - **Persistent state** — scores and notes are written to `quick-score-pdf.json` in the PDF folder; reopening the same folder resumes where you left off
 - **Progress tracking** — sidebar progress bar shows how many files have been scored, and each score button shows how many files have that colour
+- **Sort by colour** — optionally list unscored files first, then green, amber, and red; navigation follows the list as shown, and the choice is remembered
 - **CSV export** — one row per file: `filename`, `score`, `note`
 - **Keyboard-first** — every action reachable without a mouse (see [Keyboard shortcuts](#keyboard-shortcuts))
 - **CLI support** — launch with a directory or a list of PDF files as arguments
@@ -27,7 +28,8 @@ A fast, keyboard-driven desktop application for scoring a set of PDF files green
 | `N` | Focus note editor |
 | `Cmd+Enter` (in note) | Save note |
 | `Escape` (in note) | Cancel note edit |
-| `←` / `→` | Previous / next file |
+| `←` / `→` | Previous / next file (in list order) |
+| `S` | Sort list by name / by colour |
 | `↑` / `↓` | Scroll PDF up / down |
 | `+` / `−` | Zoom in / out |
 | `0` | Reset zoom |
@@ -142,7 +144,8 @@ Registered Tauri commands:
 Plain ES module — no framework, no bundler. Key state:
 
 - `session` — mirror of the backend `SessionView`
-- `currentIndex` — index of the currently open file
+- `currentIndex` — index into `session.files` of the currently open file
+- `displayOrder` — indices into `session.files` in the order listed (by name, or by colour), which Prev/Next and "next unscored" follow
 - `fileViewState` — `Map<filename, {scale, scrollTop}>` for per-file zoom/scroll memory
 
 PDFs are fetched via Tauri's asset protocol (`convertFileSrc`) and rendered onto `<canvas>` elements by pdf.js, at the screen's pixel ratio. Every page gets a correctly sized placeholder at once, but only pages within one viewport height of the view are drawn; canvases further away are dropped, so long PDFs open quickly and memory stays bounded. This keeps keyboard events in the main document (no cross-origin iframe focus issues).
