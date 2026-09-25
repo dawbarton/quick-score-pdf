@@ -7,7 +7,7 @@ async () => {
   t.key('+');
   await t.settle();
   const b = t.shown();
-  const sharp = s => s.cssWidths.every((w, i) => Math.abs(s.pixelWidths[i] - 2 * w) <= 2);
+  const sharp = s => s.pixelWidths.length > 0 && s.pixelWidths.every(p => Math.abs(p - 2 * s.cssWidths[0]) <= 2);
   return { ok: devicePixelRatio === 2 && a.pages === 2 && sharp(a) && sharp(b) && b.cssWidths[0] > a.cssWidths[0],
            a: [a.cssWidths, a.pixelWidths], b: [b.cssWidths, b.pixelWidths] };
 }

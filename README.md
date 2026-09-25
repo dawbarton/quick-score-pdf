@@ -128,7 +128,7 @@ Plain ES module — no framework, no bundler. Key state:
 - `currentIndex` — index of the currently open file
 - `fileViewState` — `Map<filename, {scale, scrollTop}>` for per-file zoom/scroll memory
 
-PDFs are fetched via Tauri's asset protocol (`convertFileSrc`) and rendered onto `<canvas>` elements by pdf.js. This keeps keyboard events in the main document (no cross-origin iframe focus issues).
+PDFs are fetched via Tauri's asset protocol (`convertFileSrc`) and rendered onto `<canvas>` elements by pdf.js, at the screen's pixel ratio. Every page gets a correctly sized placeholder at once, but only pages within one viewport height of the view are drawn; canvases further away are dropped, so long PDFs open quickly and memory stays bounded. This keeps keyboard events in the main document (no cross-origin iframe focus issues).
 
 ---
 

@@ -45,57 +45,113 @@ const DEFAULT_SCALE = 1.5;
 let currentScale = DEFAULT_SCALE;
 // Invariant: non-null only once the document for currentIndex is loaded and on screen.
 let currentPdfDoc = null;
-// Bumped by every file open and zoom. Async work captures it at the start and abandons
-// itself if it has changed, so a slow, superseded request can never overwrite the view.
+// Bumped by every file open. Async loading captures it at the start and abandons itself if
+// it has changed, so a slow, superseded load can never overwrite the view.
 let viewGen = 0;
-// True while the PDF for currentIndex is being fetched and rendered; scoring is refused
+// True while the PDF for currentIndex is being fetched and first drawn; scoring is refused
 // meanwhile, so a score can never be given to a file that is not yet on screen.
 let pdfLoadInProgress = false;
+
+// Pages are laid out as sized placeholders straight away, so scrolling and scroll restore
+// work at once, but a page is only drawn when it comes within one viewport height of the
+// view, and its canvas is dropped again when it moves further away.
+// One entry per page of the displayed document: { page, file, scale, el, task, drawnKey }.
+let pageViews = [];
+const DRAW_MARGIN = 1;  // in viewport heights, above and below the view
+const pageObserver = new IntersectionObserver(entries => {
+  for (const entry of entries) {
+    const view = pageViews.find(v => v.el === entry.target);
+    if (!view) continue;
+    if (entry.isIntersecting) drawPage(view);
+    else releasePage(view);
+  }
+}, { root: pdfContainer, rootMargin: `${DRAW_MARGIN * 100}% 0px` });
 
 function updateZoomLabel() {
   document.getElementById('zoom-level').textContent = Math.round(currentScale * 100) + '%';
 }
 
-/**
- * Render every page of `doc` off-screen, then swap them in. Returns false, leaving the
- * view untouched, if a newer open or zoom has started in the meantime.
- */
-async function renderPages(doc, scale, gen, keepScrollRatio) {
-  // Draw at device resolution and display at CSS size, so pages are sharp on Retina screens
-  const ratio = window.devicePixelRatio || 1;
-  const frag = document.createDocumentFragment();
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i);
-    if (gen !== viewGen) return false;
-    const viewport = page.getViewport({ scale });
-    const canvas = document.createElement('canvas');
-    canvas.className = 'pdf-page';
-    canvas.width = Math.floor(viewport.width * ratio);
-    canvas.height = Math.floor(viewport.height * ratio);
-    canvas.style.width = `${Math.floor(viewport.width)}px`;
-    canvas.style.height = `${Math.floor(viewport.height)}px`;
-    frag.appendChild(canvas);
-    const transform = ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0];
-    await page.render({ canvas, viewport, transform }).promise;
-    if (gen !== viewGen) return false;
-  }
-
-  const scrollRatio = pdfContainer.scrollTop / (pdfContainer.scrollHeight || 1);
-  pdfContainer.replaceChildren(frag);
-  if (keepScrollRatio) pdfContainer.scrollTop = scrollRatio * pdfContainer.scrollHeight;
-  return true;
+function sizePage(view) {
+  const { width, height } = view.page.getViewport({ scale: view.scale });
+  view.el.style.width = `${Math.floor(width)}px`;
+  view.el.style.height = `${Math.floor(height)}px`;
 }
 
-async function rerenderAtScale(scale) {
-  const doc = currentPdfDoc;
-  const gen = ++viewGen;
+/** Pages within DRAW_MARGIN viewport heights of the view (the container must be laid out). */
+function pagesNearView() {
+  const box = pdfContainer.getBoundingClientRect();
+  const margin = DRAW_MARGIN * box.height;
+  return pageViews.filter(v => {
+    const r = v.el.getBoundingClientRect();
+    return r.bottom >= box.top - margin && r.top <= box.bottom + margin;
+  });
+}
+
+/**
+ * Draw a page at its current scale and the device pixel ratio (sharp on Retina screens),
+ * then swap the new canvas in. Does nothing if that drawing is already shown or under way.
+ */
+async function drawPage(view) {
+  const ratio = window.devicePixelRatio || 1;
+  const key = `${view.scale}@${ratio}`;
+  if (view.drawnKey === key || view.task?.key === key) return;
+  view.task?.cancel();
+
+  const viewport = view.page.getViewport({ scale: view.scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.floor(viewport.width * ratio);
+  canvas.height = Math.floor(viewport.height * ratio);
+  canvas.dataset.file = view.file;
+  const transform = ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0];
+  const task = view.page.render({ canvas, viewport, transform });
+  task.key = key;
+  view.task = task;
+  try {
+    await task.promise;
+  } catch (err) {
+    if (err?.name !== 'RenderingCancelledException') console.error('PDF render error:', err);
+    return;
+  } finally {
+    if (view.task === task) view.task = null;
+  }
+  // A release, zoom, or new document in the meantime cancels the task, so reaching here
+  // means this drawing is still wanted
+  view.el.replaceChildren(canvas);
+  view.drawnKey = key;
+}
+
+function releasePage(view) {
+  view.task?.cancel();
+  view.task = null;
+  view.el.replaceChildren();
+  view.drawnKey = null;
+}
+
+/** Remove the displayed document, cancelling any drawing still under way. */
+function closeDocument() {
+  pageObserver.disconnect();
+  for (const view of pageViews) view.task?.cancel();
+  pageViews = [];
+  currentPdfDoc?.destroy();
+  currentPdfDoc = null;
+}
+
+function rerenderAtScale(scale) {
   currentScale = scale;
   updateZoomLabel();
-  try {
-    await renderPages(doc, scale, gen, true);
-  } catch (err) {
-    if (gen === viewGen) console.error('PDF render error:', err);
+  // Resize every placeholder at once, keeping the same relative scroll position; drawn
+  // pages show their old bitmap stretched until redrawn
+  const scrollRatio = pdfContainer.scrollTop / (pdfContainer.scrollHeight || 1);
+  for (const view of pageViews) {
+    view.task?.cancel();
+    view.task = null;
+    view.drawnKey = null;
+    view.scale = scale;
+    sizePage(view);
   }
+  pdfContainer.scrollTop = scrollRatio * pdfContainer.scrollHeight;
+  // The observer only reports pages whose visibility changed, so redraw the rest here
+  for (const view of pagesNearView()) drawPage(view);
 }
 
 // Redraw when the window moves to a screen with a different pixel ratio
@@ -106,22 +162,22 @@ async function rerenderAtScale(scale) {
   }, { once: true });
 })();
 
-async function zoomBy(delta) {
+function zoomBy(delta) {
   if (!currentPdfDoc) return;
   const idx = ZOOM_STEPS.findIndex(s => s >= currentScale);
   const next = delta > 0
     ? ZOOM_STEPS[Math.min(idx + 1, ZOOM_STEPS.length - 1)]
     : ZOOM_STEPS[Math.max(idx - 1, 0)];
   if (next === currentScale) return;
-  await rerenderAtScale(next);
+  rerenderAtScale(next);
 }
 
-async function zoomReset() {
+function zoomReset() {
   if (!currentPdfDoc) return;
-  await rerenderAtScale(DEFAULT_SCALE);
+  rerenderAtScale(DEFAULT_SCALE);
 }
 
-/** Load and display `filename` at `scale`, then scroll to `scrollTop`. */
+/** Load and display `filename` at `scale`, scrolled to `scrollTop`. */
 async function loadPdf(filename, scale, scrollTop, gen) {
   let doc = null;
   try {
@@ -132,19 +188,40 @@ async function loadPdf(filename, scale, scrollTop, gen) {
     const data = await response.arrayBuffer();
     if (gen !== viewGen) return;
     doc = await pdfjsLib.getDocument({ data }).promise;
-    if (!(await renderPages(doc, scale, gen, false))) return;
+    const pages = await Promise.all(
+      Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)));
+    if (gen !== viewGen) return;
+
+    // From here to the next await nothing can intervene, so this load owns the view
+    pageViews = pages.map((page, i) => {
+      const el = document.createElement('div');
+      el.className = 'pdf-page';
+      el.dataset.page = i + 1;
+      const view = { page, file: filename, scale, el, task: null, drawnKey: null };
+      sizePage(view);
+      return view;
+    });
+    pdfContainer.replaceChildren(...pageViews.map(v => v.el));
+    pdfContainer.dataset.file = filename;
+    // Laid out but invisible, so the pages in view can be found and drawn before showing
+    pdfContainer.classList.remove('hidden');
+    pdfContainer.classList.add('pending');
+    pdfContainer.scrollTop = scrollTop;
+    await Promise.all(pagesNearView().map(drawPage));
+    if (gen !== viewGen) return;
 
     currentPdfDoc = doc;
     doc = null;  // now owned by currentPdfDoc; do not destroy below
-    pdfLoadInProgress = false;
+    for (const view of pageViews) pageObserver.observe(view.el);
+    pdfContainer.classList.remove('pending');
     pdfLoading.classList.add('hidden');
-    pdfContainer.classList.remove('hidden');
-    // Only possible once the container is displayed
-    pdfContainer.scrollTop = scrollTop;
+    pdfLoadInProgress = false;
   } catch (err) {
     if (gen !== viewGen) return;
     console.error('PDF render error:', err);
     pdfLoadInProgress = false;
+    pdfContainer.classList.add('hidden');
+    pdfContainer.classList.remove('pending');
     pdfLoading.classList.add('hidden');
     noFileEl.style.display = 'flex';
     noFileEl.textContent = `Failed to load PDF: ${err?.message ?? err}`;
@@ -201,8 +278,7 @@ async function openFile(index) {
   saveCurrentViewState();
 
   const gen = ++viewGen;
-  currentPdfDoc?.destroy();
-  currentPdfDoc = null;
+  closeDocument();
   pdfLoadInProgress = true;
   pdfContainer.classList.add('hidden');
   noFileEl.style.display = 'none';
@@ -309,8 +385,7 @@ async function doExport() {
 async function startSession(s) {
   // Abandon any load or zoom still running from the previous session
   ++viewGen;
-  currentPdfDoc?.destroy();
-  currentPdfDoc = null;
+  closeDocument();
   pdfLoadInProgress = false;
   pdfLoading.classList.add('hidden');
   currentIndex = null;
@@ -411,9 +486,9 @@ document.addEventListener('keydown', async (e) => {
   else if (key === 'arrowdown') { e.preventDefault(); pdfContainer.scrollBy({ top:  200, behavior: 'smooth' }); }
 
   // Zoom — +/- /0
-  else if (key === '+' || key === '=') { e.preventDefault(); await zoomBy(+1); }
-  else if (key === '-')                { e.preventDefault(); await zoomBy(-1); }
-  else if (key === '0')                { e.preventDefault(); await zoomReset(); }
+  else if (key === '+' || key === '=') { e.preventDefault(); zoomBy(+1); }
+  else if (key === '-')                { e.preventDefault(); zoomBy(-1); }
+  else if (key === '0')                { e.preventDefault(); zoomReset(); }
 });
 
 // ── Wire up static buttons ─────────────────────────────────────────────────────

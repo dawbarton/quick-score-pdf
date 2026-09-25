@@ -59,18 +59,32 @@
       throw new Error('settle: timed out');
     },
     error: () => $('error-banner').classList.contains('hidden') ? null : $('error-text').textContent,
-    /** What is on screen: header, highlighted row, and the number of the file displayed. */
+    /**
+     * What is on screen: header, highlighted row, page placeholders (their number identifies
+     * the file), and the canvases drawn so far with the file each was drawn from.
+     */
     shown() {
+      const pages = [...document.querySelectorAll('#pdf-container .pdf-page')];
       const canvases = [...document.querySelectorAll('#pdf-container canvas')];
       return {
         header: $('current-filename').textContent,
         active: document.querySelector('.file-item.active .fname')?.textContent ?? null,
-        pages: canvases.length,
-        visible: !$('pdf-container').classList.contains('hidden'),
+        pages: pages.length,
+        drawn: pages.map((p, i) => p.querySelector('canvas') ? i + 1 : 0).filter(Boolean),
+        drawnFrom: [...new Set(canvases.map(c => c.dataset.file))],
+        visible: !$('pdf-container').classList.contains('hidden') && !$('pdf-container').classList.contains('pending'),
         zoom: parseInt($('zoom-level').textContent) / 100,
-        cssWidths: canvases.map(c => parseFloat(c.style.width)),
+        cssWidths: pages.map(p => parseFloat(p.style.width)),
         pixelWidths: canvases.map(c => c.width),
       };
+    },
+    /** Wait until `predicate()` is true. */
+    async waitFor(predicate, timeout = 3000) {
+      const end = Date.now() + timeout;
+      while (!predicate()) {
+        if (Date.now() > end) throw new Error('waitFor: timed out');
+        await sleep(20);
+      }
     },
   };
 })();
