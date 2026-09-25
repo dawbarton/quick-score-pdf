@@ -3,11 +3,14 @@
 //
 //   node tests/ui/run.mjs [name-substring]      (CHROME=/path/to/chrome to override)
 //
+// With SHOTS=<dir>, a screenshot of the page at the end of each case is saved there.
+//
 // A case file is one async arrow function returning { ok, ...details }. Any console error or
-// uncaught exception fails the case unless the file contains "allow-console-errors".
+// uncaught exception fails the case unless the file contains "allow-console-errors". A line
+// "// query: a=b&c=d" loads the page with that query string (see stub.js).
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,6 +82,7 @@ const send = (method, params = {}) => new Promise(r => {
 });
 await send('Runtime.enable');
 await send('Page.enable');
+await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
 
 async function evaluate(expression) {
   const res = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
@@ -94,7 +98,8 @@ for (const name of cases) {
   const src = readFileSync(join(here, 'cases', name), 'utf8');
   consoleErrors = [];
   const loaded = new Promise(r => onLoad = r);
-  await send('Page.navigate', { url: `${origin}/index.html` });
+  const query = src.match(/^\/\/ query: (\S+)/m)?.[1] ?? '';
+  await send('Page.navigate', { url: `${origin}/index.html${query && '?' + query}` });
   await loaded;
   let result;
   try {
@@ -102,6 +107,11 @@ for (const name of cases) {
     result = await evaluate(`(${src.trim().replace(/;$/, '')})()`);
   } catch (e) {
     result = { ok: false, error: e.message };
+  }
+  if (process.env.SHOTS) {
+    mkdirSync(process.env.SHOTS, { recursive: true });
+    const shot = await send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(join(process.env.SHOTS, name.replace(/\.js$/, '.png')), Buffer.from(shot.result.data, 'base64'));
   }
   const errorsOk = consoleErrors.length === 0 || src.includes('allow-console-errors');
   const ok = result?.ok === true && errorsOk;

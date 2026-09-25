@@ -25,6 +25,18 @@ const doneOverlay     = document.getElementById('done-overlay');
 const doneSummary     = document.getElementById('done-summary');
 const shortcutsOverlay = document.getElementById('shortcuts-overlay');
 const noteInput       = document.getElementById('note-input');
+const errorBanner     = document.getElementById('error-banner');
+const errorText       = document.getElementById('error-text');
+
+// ── Errors ─────────────────────────────────────────────────────────────────────
+/** Show `message` in the banner until dismissed; `err` (a backend string or Error) is appended. */
+function showError(message, err) {
+  const detail = err === undefined ? '' : `: ${err?.message ?? err}`;
+  errorText.textContent = message + detail;
+  errorBanner.classList.remove('hidden');
+  if (err !== undefined) console.error(message, err);
+}
+function hideError() { errorBanner.classList.add('hidden'); }
 
 // ── PDF rendering ──────────────────────────────────────────────────────────────
 const ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
@@ -122,7 +134,7 @@ async function loadPdf(filename, scale, scrollTop, gen) {
     pdfLoadInProgress = false;
     pdfLoading.classList.add('hidden');
     noFileEl.style.display = 'flex';
-    noFileEl.textContent = 'Failed to load PDF';
+    noFileEl.textContent = `Failed to load PDF: ${err?.message ?? err}`;
   } finally {
     doc?.destroy();
   }
@@ -211,7 +223,13 @@ async function applyScore(score) {
   scoreInFlight = true;
   try {
     const file = session.files[currentIndex];
-    const updated = await invoke('set_score', { filename: file.name, score });
+    let updated;
+    try {
+      updated = await invoke('set_score', { filename: file.name, score });
+    } catch (e) {
+      showError(`Could not save the score for ${file.name}`, e);
+      return;
+    }
     renderSession(updated);
     currentIndex = updated.files.findIndex(f => f.name === file.name);
 
@@ -259,7 +277,7 @@ noteInput.addEventListener('blur', async () => {
     const file = session.files.find(f => f.name === name);
     if (file) file.note = note || null;
   } catch (e) {
-    console.error('Failed to save note:', e);
+    showError(`Could not save the note for ${name}`, e);
   }
 });
 
@@ -271,7 +289,7 @@ async function onFileClick(i) {
 // ── Export ─────────────────────────────────────────────────────────────────────
 async function doExport() {
   try { await invoke('export_csv'); }
-  catch (e) { if (e !== 'cancelled') console.error(e); }
+  catch (e) { if (e !== 'cancelled') showError('Could not export the CSV', e); }
 }
 
 // ── Session startup ────────────────────────────────────────────────────────────
@@ -285,6 +303,8 @@ async function startSession(s) {
   currentIndex = null;
   currentScale = DEFAULT_SCALE;
   fileViewState.clear();
+  hideError();
+  if (s.warning) showError(s.warning);
   renderSession(s);
   welcomeEl.classList.add('hidden');
   appEl.classList.remove('hidden');
@@ -305,7 +325,7 @@ async function openFolder() {
     const s = await invoke('select_folder');
     await startSession(s);
   } catch (e) {
-    if (e !== 'cancelled') console.error(e);
+    if (e !== 'cancelled') showError('Could not open the folder', e);
   }
 }
 
@@ -344,6 +364,7 @@ document.addEventListener('keydown', async (e) => {
   }
   if (e.key === '?') { e.preventDefault(); toggleShortcuts(); return; }
   if (key === 'escape') {
+    hideError();
     closeShortcuts();
     doneOverlay.classList.add('hidden');
     return;
@@ -395,6 +416,7 @@ document.getElementById('next-btn').addEventListener('click', async () => {
   if (currentIndex === null) return;
   await openFile((currentIndex + 1) % session.files.length);
 });
+document.getElementById('error-close-btn').addEventListener('click', hideError);
 document.getElementById('done-review-btn').addEventListener('click', () => doneOverlay.classList.add('hidden'));
 document.getElementById('zoom-in-btn').addEventListener('click',    () => zoomBy(+1));
 document.getElementById('zoom-out-btn').addEventListener('click',   () => zoomBy(-1));
@@ -404,7 +426,13 @@ document.querySelectorAll('.score-btn[data-score]').forEach(btn =>
 document.getElementById('clear-btn').addEventListener('click', async () => {
   if (currentIndex === null) return;
   const file = session.files[currentIndex];
-  const updated = await invoke('set_score', { filename: file.name, score: null });
+  let updated;
+  try {
+    updated = await invoke('set_score', { filename: file.name, score: null });
+  } catch (e) {
+    showError(`Could not clear the score for ${file.name}`, e);
+    return;
+  }
   renderSession(updated);
   currentIndex = updated.files.findIndex(f => f.name === file.name);
   updateScoreButtons(null);
@@ -417,6 +445,6 @@ document.getElementById('clear-btn').addEventListener('click', async () => {
     if (!s) return;
     await startSession(s);
   } catch (e) {
-    console.error('CLI session error:', e);
+    showError('Could not open the files given on the command line', e);
   }
 })();

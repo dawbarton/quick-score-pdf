@@ -92,6 +92,10 @@ html, body { height: 100%; font-family: system-ui, sans-serif; background: var(-
 .btn-link:hover { color: var(--text); }
 
 /* ── Overlays ────────────────────────────────────────── */
+/* ── Error banner ────────────────────────────────────── */
+.error-banner { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 200; max-width: min(720px, calc(100vw - 32px)); display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px 10px 16px; border: 1px solid var(--red); border-radius: 8px; background: #450a0a; box-shadow: 0 4px 16px #0008; font-size: 0.85rem; }
+.error-text { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; padding-top: 3px; }
+
 .overlay { position: fixed; inset: 0; background: #00000099; display: flex; align-items: center; justify-content: center; z-index: 100; }
 .done-card, .dialog-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 40px 48px; text-align: center; max-width: 400px; }
 .done-icon { font-size: 3rem; color: var(--green); margin-bottom: 12px; }

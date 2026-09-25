@@ -1,6 +1,10 @@
 // Stand-in for the Tauri bridge, loaded before main.js. Replies arrive after random delays
 // (up to window.MAXDELAY ms), hence out of order, as they can from the real backend.
 // Also installs small helpers on window.t for the test cases.
+//
+// Failures: set window.FAIL = { command: 'message' } to make a command reject, as Tauri does,
+// with that string; get_pdf_url then returns a path that does not exist. At page load, use the
+// query string instead: ?fail=command&warn=text (warn adds a load warning to the session).
 (() => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const state = {
@@ -10,17 +14,23 @@
   const view = () => structuredClone(state);
   let inflight = 0;
   window.calls = [];
+  const query = new URLSearchParams(location.search);
+  window.FAIL = query.has('fail') ? { [query.get('fail')]: 'stub failure' } : {};
 
   window.__TAURI__ = { core: {
     convertFileSrc: p => p,
     async invoke(cmd, a = {}) {
       window.calls.push([cmd, a]);
-      if (cmd === 'get_cli_session') return view();
+      if (cmd === 'get_cli_session') {
+        if (window.FAIL[cmd]) throw window.FAIL[cmd];
+        return query.has('warn') ? { ...view(), warning: query.get('warn') } : view();
+      }
       inflight++;
       try {
         await sleep(cmd === 'set_note' ? (window.NOTEDELAY ?? 0) : Math.random() * (window.MAXDELAY ?? 80));
         const f = a.filename && state.files.find(f => f.name === a.filename);
-        if (cmd === 'get_pdf_url') return `pdfs/${a.filename}`;
+        if (cmd === 'get_pdf_url') return window.FAIL[cmd] ? 'pdfs/missing.pdf' : `pdfs/${a.filename}`;
+        if (window.FAIL[cmd]) throw window.FAIL[cmd];
         if (cmd === 'set_score') { f.score = a.score; return view(); }
         if (cmd === 'set_note') { f.note = a.note || null; return; }
         throw new Error('stub: unknown command ' + cmd);
@@ -48,6 +58,7 @@
       }
       throw new Error('settle: timed out');
     },
+    error: () => $('error-banner').classList.contains('hidden') ? null : $('error-text').textContent,
     /** What is on screen: header, highlighted row, and the number of the file displayed. */
     shown() {
       const canvases = [...document.querySelectorAll('#pdf-container canvas')];

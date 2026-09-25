@@ -50,6 +50,8 @@ quick-score-pdf /path/to/pdfs/
 quick-score-pdf /path/to/pdfs/a.pdf /path/to/pdfs/b.pdf
 ```
 
+All files must be in the same folder. If an argument is neither a folder nor an existing PDF, or the files are in different folders, the app opens on the welcome screen and shows the error.
+
 In file-list mode only the named PDFs appear in the session; the `quick-score-pdf.json` state file records the subset so the same selection is restored on relaunch.
 
 ---

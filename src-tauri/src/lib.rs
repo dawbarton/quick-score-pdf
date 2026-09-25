@@ -41,6 +41,18 @@ pub struct Session {
     retained_scores: BTreeMap<String, Option<Score>>,
     #[serde(skip)]
     retained_notes: BTreeMap<String, String>,
+    /// Problem met while loading that the user should be told about, e.g. an unparseable
+    /// state file that was moved aside. Reported once, when the session is opened.
+    #[serde(skip)]
+    load_warning: Option<String>,
+}
+
+/// Contents of a state file, as read back by `Session::load_saved`.
+#[derive(Default)]
+struct Saved {
+    scores: BTreeMap<String, Option<Score>>,
+    notes: BTreeMap<String, String>,
+    warning: Option<String>,
 }
 
 impl Session {
@@ -51,14 +63,14 @@ impl Session {
     /// Read the saved scores and notes. A missing file gives empty maps. An unparseable file
     /// is moved aside rather than silently replaced by the next save; an unreadable one
     /// (e.g. a cloud file that cannot be fetched) is an error, so nothing overwrites it.
-    fn load_saved(path: &Path) -> Result<(BTreeMap<String, Option<Score>>, BTreeMap<String, String>), String> {
+    fn load_saved(path: &Path) -> Result<Saved, String> {
         let data = match fs::read_to_string(path) {
             Ok(data) => data,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
             Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
         };
         match serde_json::from_str::<Session>(&data) {
-            Ok(s) => Ok((s.scores, s.notes)),
+            Ok(s) => Ok(Saved { scores: s.scores, notes: s.notes, warning: None }),
             Err(e) => {
                 let secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -66,8 +78,12 @@ impl Session {
                     .unwrap_or(0);
                 let backup = path.with_extension(format!("json.unreadable-{secs}"));
                 fs::rename(path, &backup).map_err(|e| e.to_string())?;
-                eprintln!("{} could not be parsed ({e}); moved to {}", path.display(), backup.display());
-                Ok(Default::default())
+                let warning = format!(
+                    "The saved scores could not be read ({e}), so this folder starts unscored. \
+                     The unreadable file was moved to {}.",
+                    backup.display()
+                );
+                Ok(Saved { warning: Some(warning), ..Default::default() })
             }
         }
     }
@@ -93,7 +109,7 @@ impl Session {
         pdf_files.dedup();
 
         // Carry over any existing scores and notes from the state file
-        let (mut saved_scores, mut saved_notes) = Self::load_saved(&path)?;
+        let Saved { scores: mut saved_scores, notes: mut saved_notes, warning } = Self::load_saved(&path)?;
 
         let scores = pdf_files
             .iter()
@@ -114,6 +130,7 @@ impl Session {
             notes,
             retained_scores: saved_scores,
             retained_notes: saved_notes,
+            load_warning: warning,
         })
     }
 
@@ -141,6 +158,8 @@ pub struct FileEntry {
 pub struct SessionView {
     pub folder: String,
     pub files: Vec<FileEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 impl From<&Session> for SessionView {
@@ -156,6 +175,7 @@ impl From<&Session> for SessionView {
                     note: s.notes.get(name).cloned(),
                 })
                 .collect(),
+            warning: None,
         }
     }
 }
@@ -167,65 +187,68 @@ enum CliInput {
     Files { dir: PathBuf, names: Vec<String> },
 }
 
-/// `args` excludes the program name.
-fn parse_cli_input(args: impl IntoIterator<Item = String>) -> Option<CliInput> {
+/// `args` excludes the program name. `Ok(None)` means there were no arguments.
+fn parse_cli_input(args: impl IntoIterator<Item = String>) -> Result<Option<CliInput>, String> {
     let args: Vec<String> = args.into_iter()
         .filter(|a| !a.starts_with('-'))
         .collect();
 
-    if args.is_empty() { return None; }
+    if args.is_empty() { return Ok(None); }
 
     // Single directory argument
     let first = PathBuf::from(&args[0]);
     if first.is_dir() {
-        return Some(CliInput::Dir(first.canonicalize().unwrap_or(first)));
+        return Ok(Some(CliInput::Dir(first.canonicalize().unwrap_or(first))));
     }
 
     // One or more PDF file arguments, resolved to canonical paths
     let pdfs: Vec<PathBuf> = args.iter()
-        .filter_map(|a| {
+        .map(|a| {
             let p = PathBuf::from(a);
             let is_pdf = p.extension().map(|e| e.eq_ignore_ascii_case("pdf")).unwrap_or(false);
             match p.canonicalize() {
-                Ok(c) if is_pdf && c.is_file() => Some(c),
-                _ => { eprintln!("ignoring {a}: not an existing PDF file"); None }
+                Ok(c) if is_pdf && c.is_file() => Ok(c),
+                _ => Err(format!("Not a folder or an existing PDF file: {a}")),
             }
         })
-        .collect();
-
-    if pdfs.is_empty() { return None; }
+        .collect::<Result<_, _>>()?;
 
     // The session is keyed by filename within one folder, so every file must share it:
     // otherwise b/y.pdf would be looked up as a/y.pdf
-    let dir = pdfs[0].parent()?.to_path_buf();
+    let dir = pdfs[0].parent().ok_or("PDF file has no parent folder")?.to_path_buf();
     if let Some(other) = pdfs.iter().find(|p| p.parent() != Some(dir.as_path())) {
-        eprintln!(
-            "all PDF files must be in the same folder ({} is not in {})",
+        return Err(format!(
+            "All PDF files must be in the same folder: {} is not in {}",
             other.display(),
             dir.display()
-        );
-        return None;
+        ));
     }
     let names = pdfs.iter()
         .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .collect();
 
-    Some(CliInput::Files { dir, names })
+    Ok(Some(CliInput::Files { dir, names }))
 }
 
 #[tauri::command]
 async fn get_cli_session(app: tauri::AppHandle) -> Result<Option<SessionView>, String> {
-    let Some(input) = parse_cli_input(std::env::args().skip(1)) else { return Ok(None); };
+    let Some(input) = parse_cli_input(std::env::args().skip(1))? else { return Ok(None); };
 
     let (dir, filter) = match input {
         CliInput::Dir(dir)            => (dir, None),
         CliInput::Files { dir, names } => (dir, Some(names)),
     };
 
-    let session = Session::load_or_create(&dir, filter)?;
+    open_session(&app, Session::load_or_create(&dir, filter)?).map(Some)
+}
+
+/// Save a newly loaded session, make it current, and return its view with any load warning.
+fn open_session(app: &tauri::AppHandle, mut session: Session) -> Result<SessionView, String> {
     session.save()?;
-    *app.state::<std::sync::Mutex<Option<Session>>>().lock().unwrap_or_else(|e| e.into_inner()) = Some(session.clone());
-    Ok(Some(SessionView::from(&session)))
+    let warning = session.load_warning.take();
+    let view = SessionView { warning, ..SessionView::from(&session) };
+    *app.state::<std::sync::Mutex<Option<Session>>>().lock().unwrap_or_else(|e| e.into_inner()) = Some(session);
+    Ok(view)
 }
 
 // ── Tauri commands ─────────────────────────────────────────────────────────────
@@ -241,11 +264,7 @@ async fn select_folder(app: tauri::AppHandle) -> Result<SessionView, String> {
         .ok_or_else(|| "cancelled".to_string())?;
 
     let path = folder.as_path().ok_or("invalid path")?.to_path_buf();
-    let session = Session::load_or_create(&path, None)?;
-    session.save()?;
-
-    *app.state::<std::sync::Mutex<Option<Session>>>().lock().unwrap_or_else(|e| e.into_inner()) = Some(session.clone());
-    Ok(SessionView::from(&session))
+    open_session(&app, Session::load_or_create(&path, None)?)
 }
 
 #[tauri::command]
@@ -405,6 +424,7 @@ mod tests {
         fs::write(Session::state_path(&dir), "{ truncated").unwrap();
 
         let session = Session::load_or_create(&dir, None).unwrap();
+        assert!(session.load_warning.as_deref().unwrap_or("").contains("unreadable-"));
         session.save().unwrap();
 
         let backups: Vec<_> = fs::read_dir(&dir).unwrap()
@@ -426,14 +446,17 @@ mod tests {
         touch(&dir.join("y"), &["b.pdf"]);
         let arg = |p: &str| dir.join(p).to_string_lossy().to_string();
 
-        match parse_cli_input([arg("x/a.pdf"), arg("x/b.pdf"), arg("x/missing.pdf")]) {
-            Some(CliInput::Files { dir: d, names }) => {
+        match parse_cli_input([arg("x/a.pdf"), arg("x/b.pdf")]) {
+            Ok(Some(CliInput::Files { dir: d, names })) => {
                 assert_eq!(d, dir.join("x").canonicalize().unwrap());
                 assert_eq!(names, ["a.pdf", "b.pdf"]);
             }
             _ => panic!("expected a file list"),
         }
-        assert!(parse_cli_input([arg("x/a.pdf"), arg("y/b.pdf")]).is_none());
+        let err = |args: Vec<String>| parse_cli_input(args).err().unwrap_or_default();
+        assert!(err(vec![arg("x/a.pdf"), arg("y/b.pdf")]).contains("same folder"));
+        assert!(err(vec![arg("x/a.pdf"), arg("x/missing.pdf")]).contains("missing.pdf"));
+        assert!(matches!(parse_cli_input(Vec::<String>::new()), Ok(None)));
         fs::remove_dir_all(&dir).unwrap();
     }
 }
