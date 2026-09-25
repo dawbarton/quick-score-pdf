@@ -61,6 +61,8 @@ function updateZoomLabel() {
  * view untouched, if a newer open or zoom has started in the meantime.
  */
 async function renderPages(doc, scale, gen, keepScrollRatio) {
+  // Draw at device resolution and display at CSS size, so pages are sharp on Retina screens
+  const ratio = window.devicePixelRatio || 1;
   const frag = document.createDocumentFragment();
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
@@ -68,10 +70,13 @@ async function renderPages(doc, scale, gen, keepScrollRatio) {
     const viewport = page.getViewport({ scale });
     const canvas = document.createElement('canvas');
     canvas.className = 'pdf-page';
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
+    canvas.width = Math.floor(viewport.width * ratio);
+    canvas.height = Math.floor(viewport.height * ratio);
+    canvas.style.width = `${Math.floor(viewport.width)}px`;
+    canvas.style.height = `${Math.floor(viewport.height)}px`;
     frag.appendChild(canvas);
-    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    const transform = ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0];
+    await page.render({ canvas, viewport, transform }).promise;
     if (gen !== viewGen) return false;
   }
 
@@ -92,6 +97,14 @@ async function rerenderAtScale(scale) {
     if (gen === viewGen) console.error('PDF render error:', err);
   }
 }
+
+// Redraw when the window moves to a screen with a different pixel ratio
+(function watchPixelRatio() {
+  matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change', () => {
+    if (currentPdfDoc) rerenderAtScale(currentScale);
+    watchPixelRatio();
+  }, { once: true });
+})();
 
 async function zoomBy(delta) {
   if (!currentPdfDoc) return;

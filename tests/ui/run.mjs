@@ -7,7 +7,8 @@
 //
 // A case file is one async arrow function returning { ok, ...details }. Any console error or
 // uncaught exception fails the case unless the file contains "allow-console-errors". A line
-// "// query: a=b&c=d" loads the page with that query string (see stub.js).
+// "// query: a=b&c=d" loads the page with that query string (see stub.js), and a line
+// "// dpr: 2" emulates that device pixel ratio (default 1).
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -82,7 +83,6 @@ const send = (method, params = {}) => new Promise(r => {
 });
 await send('Runtime.enable');
 await send('Page.enable');
-await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
 
 async function evaluate(expression) {
   const res = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
@@ -98,6 +98,8 @@ for (const name of cases) {
   const src = readFileSync(join(here, 'cases', name), 'utf8');
   consoleErrors = [];
   const loaded = new Promise(r => onLoad = r);
+  const dpr = +(src.match(/^\/\/ dpr: (\S+)/m)?.[1] ?? 1);
+  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: dpr, mobile: false });
   const query = src.match(/^\/\/ query: (\S+)/m)?.[1] ?? '';
   await send('Page.navigate', { url: `${origin}/index.html${query && '?' + query}` });
   await loaded;

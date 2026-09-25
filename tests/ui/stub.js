@@ -68,7 +68,8 @@
         pages: canvases.length,
         visible: !$('pdf-container').classList.contains('hidden'),
         zoom: parseInt($('zoom-level').textContent) / 100,
-        widths: canvases.map(c => c.width),
+        cssWidths: canvases.map(c => parseFloat(c.style.width)),
+        pixelWidths: canvases.map(c => c.width),
       };
     },
   };
